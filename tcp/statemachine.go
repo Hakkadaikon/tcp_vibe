@@ -52,6 +52,14 @@ func (c *Conn) State() State {
 	return c.tcb.state
 }
 
+// ReachedEstablished は一度でも ESTABLISHED に達したかを返す。
+// 現在状態が ESTABLISHED を過ぎていても (即 CLOSE-WAIT 等) 握手成立を取りこぼさない。
+func (c *Conn) ReachedEstablished() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tcb.reachedEstablished
+}
+
 // Origin は SYN-RECEIVED の由来を返す。
 func (c *Conn) Origin() Origin {
 	c.mu.Lock()
@@ -392,6 +400,7 @@ func (c *Conn) onSegmentSynSent(h TCPHeader) {
 		c.tcb.snd.una = h.AckNum
 		c.ackRetxQueue(h.AckNum) // 確認済み SYN を再送キューから除去
 		c.tcb.state = Established
+		c.tcb.reachedEstablished = true
 		c.sendAck()
 	} else {
 		// bare SYN (同時オープン) → SYN-RECEIVED (active origin)。
@@ -500,6 +509,7 @@ func (c *Conn) advanceStateOnAck(h TCPHeader) {
 	switch c.tcb.state {
 	case SynReceived:
 		c.tcb.state = Established
+		c.tcb.reachedEstablished = true
 	case FinWait1:
 		if c.finAcked() {
 			c.tcb.state = FinWait2

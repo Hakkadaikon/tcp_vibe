@@ -92,6 +92,11 @@ type TCB struct {
 	snd    sndVars
 	rcv    rcvVars
 
+	// reachedEstablished は一度でも ESTABLISHED に入ったかの記録。
+	// ESTABLISHED→CLOSE-WAIT が速く現在値ポーリングでは取りこぼす握手成立を、
+	// 到達の事実として残すための観測専用フラグ (遷移ロジックには影響しない)。
+	reachedEstablished bool
+
 	// maxSndWnd は peer から受信した過去最大の窓。RFC 5961 ACK 受理範囲の下限に使う。
 	// window scale 無しなので初期値は 65535 上限まで取りうる。
 	maxSndWnd uint16

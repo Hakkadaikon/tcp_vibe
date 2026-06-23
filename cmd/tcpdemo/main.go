@@ -45,34 +45,76 @@ func main() {
 	case "server":
 		conn.PassiveOpen()
 		log.Printf("passive open: %s:%d で SYN を待つ", *localIP, *localPort)
+		runServer(conn)
 	case "client":
 		conn.ActiveOpen(rand.Uint32())
 		log.Printf("active open: %s:%d -> %s:%d へ SYN 送出", *localIP, *localPort, *remoteIP, *remotePort)
+		runClient(conn)
 	default:
 		log.Fatalf("不明な mode: %q (client か server)", *mode)
 	}
+}
 
-	// ESTABLISHED まで待つ。
-	if !waitFor(conn, tcp.Established, 30*time.Second) {
+// runClient は能動側のフロー。握手成立を確認したら graceful close を主導する。
+func runClient(conn *tcp.Conn) {
+	if !waitEstablished(conn, 30*time.Second) {
 		log.Fatalf("握手が成立しなかった: 現在 %v", conn.State())
 	}
-	log.Printf("ESTABLISHED 到達")
+	log.Printf("ESTABLISHED 到達 (握手成立)")
 
-	// 接続を確認したら close する。
+	log.Printf("close 開始: client から FIN を送る")
 	conn.Close()
-	log.Printf("close 要求送出: 現在 %v", conn.State())
+	waitClosed(conn)
+}
 
-	// close 完了 (CLOSED) まで待って終了する。
-	if !waitFor(conn, tcp.Closed, 30*time.Second) {
+// runServer は受動側のフロー。自分からは閉じず、相手の FIN で CLOSE-WAIT に
+// なったら自分も Close して LAST-ACK → CLOSED まで進める。
+func runServer(conn *tcp.Conn) {
+	if !waitEstablished(conn, 30*time.Second) {
+		log.Fatalf("握手が成立しなかった: 現在 %v", conn.State())
+	}
+	log.Printf("ESTABLISHED 到達 (握手成立)")
+
+	// 相手が FIN を送って CLOSE-WAIT になるまで待ち、そこで自分も閉じる。
+	if !waitState(conn, tcp.CloseWait, 30*time.Second) {
+		log.Printf("相手の close を待たずタイムアウト: 現在 %v", conn.State())
+		return
+	}
+	log.Printf("close 開始: 相手の FIN を受けて server からも FIN を送る")
+	conn.Close()
+	waitClosed(conn)
+}
+
+// waitClosed は CLOSED 到達まで待ち、節目をログに出す。
+func waitClosed(conn *tcp.Conn) {
+	if !waitState(conn, tcp.Closed, 30*time.Second) {
 		log.Printf("CLOSED まで到達せず終了: 現在 %v", conn.State())
 		return
 	}
-	log.Printf("CLOSED 到達。終了")
+	log.Printf("CLOSED 到達。正常終了")
 }
 
-// waitFor は conn が want になるまで timeout まで待つ。到達したら true。
-// 1 秒ごとに現在の状態をログに出し、どこで詰まっているか分かるようにする。
-func waitFor(conn *tcp.Conn, want tcp.State, timeout time.Duration) bool {
+// waitEstablished は握手成立を待つ。現在値ではなく「ESTABLISHED に到達したか」で
+// 判定するため、ESTABLISHED→CLOSE-WAIT が速くても取りこぼさない。
+func waitEstablished(conn *tcp.Conn, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	nextReport := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		if conn.ReachedEstablished() {
+			return true
+		}
+		if time.Now().After(nextReport) {
+			log.Printf("握手待機中: 現在 %v", conn.State())
+			nextReport = nextReport.Add(1 * time.Second)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return conn.ReachedEstablished()
+}
+
+// waitState は conn が want になるまで timeout まで待つ。到達したら true。
+// 終端状態 (CLOSE-WAIT/CLOSED) の検知に使う。1 秒ごとに現在状態をログに出す。
+func waitState(conn *tcp.Conn, want tcp.State, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	nextReport := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {

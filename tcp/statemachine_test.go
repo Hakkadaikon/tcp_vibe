@@ -93,6 +93,31 @@ func TestActiveHandshakeReachesEstablished(t *testing.T) {
 	expectFlags(t, peer, Flags(FlagACK))
 }
 
+// 握手成立直後に相手が FIN を送り CLOSE-WAIT へ即落ちしても、ESTABLISHED 到達は
+// 記録に残る。現在値ポーリングでは取りこぼす握手成立をデモが拾えることの保証。
+func TestReachedEstablishedSurvivesImmediateClose(t *testing.T) {
+	c, peer, _ := newTestConn(t)
+
+	c.ActiveOpen(1000)
+	if c.ReachedEstablished() {
+		t.Fatal("SYN-SENT で到達済みになってはいけない")
+	}
+	_ = expectFlags(t, peer, Flags(FlagSYN))
+
+	// SYN,ACK で ESTABLISHED 到達 → すぐ相手 FIN で CLOSE-WAIT へ落とす。
+	c.onSegment(TCPHeader{Flags: Flags(FlagSYN | FlagACK), SeqNum: 5000, AckNum: 1001}, nil)
+	_ = expectFlags(t, peer, Flags(FlagACK))
+	c.onSegment(TCPHeader{Flags: Flags(FlagFIN | FlagACK), SeqNum: 5001, AckNum: 1001}, nil)
+	if c.State() != CloseWait {
+		t.Fatalf("FIN 受信後は CLOSE-WAIT のはず: got %v", c.State())
+	}
+
+	// 現在は CLOSE-WAIT でも、ESTABLISHED を通過した事実は残る。
+	if !c.ReachedEstablished() {
+		t.Fatal("ESTABLISHED を通過したのに到達が記録されていない")
+	}
+}
+
 // 受動オープン + SYN で SYN-RECEIVED (passive origin)、その後 RST で LISTEN へ戻る。
 func TestPassiveOpenSynRcvdReturnsToListenOnRst(t *testing.T) {
 	c, peer, _ := newTestConn(t)
