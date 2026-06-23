@@ -138,7 +138,7 @@ func (s retxSeg) seqLen() uint32 {
 // msl は Maximum Segment Lifetime (RFC 9293 §3.4.2 の推奨値 2 分)。
 const msl = 2 * time.Minute
 
-// timeWaitDuration は TIME-WAIT の linger 時間 = 2*MSL (RFC 9293 R-059, MUST-13)。
+// timeWaitDuration は TIME-WAIT の linger 時間 = 2*MSL (RFC 9293 MUST-13)。
 const timeWaitDuration = 2 * msl
 
 // 再送タイマの定数 seam (テストで境界を突けるよう変数でなく定数だが調整可)。
@@ -146,7 +146,7 @@ const timeWaitDuration = 2 * msl
 const (
 	initialRTO     = 1 * time.Second  // RTO 初期値 (RFC 6298 推奨は 1 秒)
 	maxRTO         = 60 * time.Second // バックオフ上限 (RFC 6298 §2.5 の下限 60 秒)
-	maxRetransmits = 5                // R2 相当。これを超える再送で接続を閉じる (R-093)
+	maxRetransmits = 5                // R2 相当。これを超える再送で接続を閉じる
 )
 
 // challenge ACK throttling の定数 seam (RFC 5961 §7 の SHOULD、調整可)。

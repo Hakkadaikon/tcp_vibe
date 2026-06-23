@@ -32,7 +32,7 @@ func lastSent(t *testing.T, peer Link) (TCPHeader, int) {
 	}
 }
 
-// T-051: RTO ちょうどで再送 / RTO-1ns では再送しない。
+// RTO ちょうどで再送 / RTO-1ns では再送しない。
 func TestRetransmitFiresAtRTO(t *testing.T) {
 	// RTO 直前: 再送しない (初回 SYN の 1 通だけ)。
 	c, peer, fc := armedConn(t)
@@ -55,7 +55,7 @@ func TestRetransmitFiresAtRTO(t *testing.T) {
 	}
 }
 
-// T-052: RTO 前に acceptable ACK が来たらキューから除去され、再送されない。
+// RTO 前に acceptable ACK が来たらキューから除去され、再送されない。
 func TestAckBeforeRTOClearsQueue(t *testing.T) {
 	c, peer, fc := armedConn(t)
 
@@ -80,7 +80,7 @@ func TestAckBeforeRTOClearsQueue(t *testing.T) {
 	}
 }
 
-// T-053: 連続再送で RTO が倍化する (2 回目は 2·RTO の境界で発火)。
+// 連続再送で RTO が倍化する (2 回目は 2·RTO の境界で発火)。
 func TestRetransmitExponentialBackoff(t *testing.T) {
 	// 1 回目を発火させたあと、2·RTO 直前では 2 回目が発火しない。
 	c, peer, fc := armedConn(t)
@@ -106,7 +106,7 @@ func TestRetransmitExponentialBackoff(t *testing.T) {
 	}
 }
 
-// T-054: 再送上限到達で接続が CLOSED (宙吊りしない)。
+// 再送上限到達で接続が CLOSED (宙吊りしない)。
 func TestRetransmitLimitClosesConnection(t *testing.T) {
 	c, _, fc := armedConn(t)
 

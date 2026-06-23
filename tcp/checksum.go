@@ -4,7 +4,7 @@ package tcp
 // 16bit ワードの ones' complement sum の ones' complement。
 
 // Checksum は data の 16bit ワード和 (end-around carry 畳み込み) の補数を返す。
-// 奇数長は末尾を 0 パディングして 16bit に整える (計算のみ。パッドは送信しない)。R-100。
+// 奇数長は末尾を 0 パディングして 16bit に整える (計算のみ。パッドは送信しない)。
 func Checksum(data []byte) uint16 {
 	var sum uint32
 	n := len(data)
@@ -22,7 +22,7 @@ func Checksum(data []byte) uint16 {
 }
 
 // TCPChecksum は IPv4 擬似ヘッダ (src/dst/zero/proto=6/tcpLen) 込みで
-// TCP セグメントのチェックサムを計算する。R-101。
+// TCP セグメントのチェックサムを計算する。
 // tcpSegment はチェックサムフィールドを 0 にした状態で渡す。
 func TCPChecksum(srcIP, dstIP [4]byte, tcpSegment []byte) uint16 {
 	const protoTCP = 6

@@ -5,7 +5,7 @@ import (
 	"testing/quick"
 )
 
-// T-002 (GOLD): 既知の IPv4 ヘッダバイト列を Parse して各フィールドが一致する。
+// 既知の IPv4 ヘッダバイト列を Parse して各フィールドが一致する (GOLD)。
 func TestParseIPv4Header_Gold(t *testing.T) {
 	// version=4 IHL=5, TotalLength=0x0073, proto=17(UDP), src=192.168.0.1 dst=192.168.0.199
 	raw := []byte{
@@ -25,7 +25,7 @@ func TestParseIPv4Header_Gold(t *testing.T) {
 	}
 }
 
-// T-002 (PBT): Marshal してから Parse すると元に戻る。
+// Marshal してから Parse すると元に戻る。
 func TestIPv4Header_RoundTrip(t *testing.T) {
 	f := func(totalLen uint16, proto uint8, id uint16, ttl uint8, sa, da uint32) bool {
 		h := IPv4Header{
@@ -48,7 +48,7 @@ func TestIPv4Header_RoundTrip(t *testing.T) {
 	}
 }
 
-// T-002: Marshal がヘッダチェックサムを正しく埋め、Parse が検証できる。
+// Marshal がヘッダチェックサムを正しく埋め、Parse が検証できる。
 func TestIPv4Header_ChecksumVerified(t *testing.T) {
 	h := IPv4Header{Version: 4, IHL: 5, TotalLength: 40, TTL: 64, Protocol: 6,
 		SrcAddr: [4]byte{10, 0, 0, 1}, DstAddr: [4]byte{10, 0, 0, 2}}
@@ -56,14 +56,14 @@ func TestIPv4Header_ChecksumVerified(t *testing.T) {
 	if Checksum(b[:20]) != 0 {
 		t.Errorf("marshaled header checksum must verify to 0, got %#04x", Checksum(b[:20]))
 	}
-	// 1bit 壊すと Parse がチェックサムエラーで弾く (INV-010 相当)。
+	// 1bit 壊すと Parse がチェックサムエラーで弾く。
 	b[0] ^= 0x01
 	if _, err := ParseIPv4Header(b); err == nil {
 		t.Error("corrupted header should be rejected by checksum")
 	}
 }
 
-// T-003: IHL 境界 (5=20byte / 6=オプション付き / <5 はエラー)。
+// IHL 境界 (5=20byte / 6=オプション付き / <5 はエラー)。
 func TestParseIPv4Header_IHLBoundary(t *testing.T) {
 	// IHL=6: 24 バイトヘッダ。
 	raw := make([]byte, 24)
@@ -86,7 +86,7 @@ func TestParseIPv4Header_IHLBoundary(t *testing.T) {
 	}
 }
 
-// T-009: short read 拒否 (20byte OK / 19byte エラー)。宣言長 > 実バッファもエラー。
+// short read 拒否 (20byte OK / 19byte エラー)。宣言長 > 実バッファもエラー。
 func TestParseIPv4Header_ShortRead(t *testing.T) {
 	ok := make([]byte, 20)
 	ok[0] = 0x45

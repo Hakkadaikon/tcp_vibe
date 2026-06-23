@@ -23,7 +23,7 @@ func countSent(peer Link) int {
 	}
 }
 
-// T-049 / INV-013: 5 秒窓で上限個まで送出、上限超は抑制。
+// 5 秒窓で上限個まで送出、上限超は抑制。
 func TestChallengeAckThrottleWithinWindow(t *testing.T) {
 	c, peer, _ := estab(t)
 
@@ -36,7 +36,7 @@ func TestChallengeAckThrottleWithinWindow(t *testing.T) {
 	}
 }
 
-// T-049: 窓経過 +1ns でカウンタがリセットされ再び送出される。
+// 窓経過 +1ns でカウンタがリセットされ再び送出される。
 func TestChallengeAckThrottleResetsAfterWindow(t *testing.T) {
 	// 窓を上限まで使い切ったあと、窓ちょうどでは未リセット、窓+1ns でリセット。
 	c, peer, fc := estab(t)

@@ -6,7 +6,7 @@ import (
 	"testing/quick"
 )
 
-// T-010: SEG_LT 境界 (mod 2^32 環状比較)
+// SEG_LT 境界 (mod 2^32 環状比較)
 func TestSeqLT_Boundaries(t *testing.T) {
 	const max = math.MaxUint32 // 2^32-1
 	cases := []struct {
@@ -27,7 +27,7 @@ func TestSeqLT_Boundaries(t *testing.T) {
 	}
 }
 
-// T-011: SEG_LEQ / GT 境界
+// SEG_LEQ / GT 境界
 func TestSeqLEQ_GT(t *testing.T) {
 	if !SeqLEQ(5, 5) {
 		t.Error("SeqLEQ(x,x) should be true")
@@ -43,7 +43,7 @@ func TestSeqLEQ_GT(t *testing.T) {
 	}
 }
 
-// T-012: 三分律・反対称 (半周内) — property-based
+// 三分律・反対称 (半周内)
 func TestSeqLT_Trichotomy(t *testing.T) {
 	// 半周 (2^31) 未満の距離なら厳密な全順序。
 	f := func(a uint32, d uint16) bool {
@@ -97,7 +97,7 @@ func TestSeqLT_AntipodeIsAmbiguous(t *testing.T) {
 	}
 }
 
-// 窓を 2^31 未満に保てば反対称律は成立する (Lean で証明した境界)。
+// 窓を 2^31 未満に保てば反対称律は成立する。
 func TestSeqLT_AntisymmetryWithinHalfWindow(t *testing.T) {
 	f := func(a uint32, d uint32) bool {
 		d = d % (1 << 31) // 半周未満に制限
@@ -112,7 +112,7 @@ func TestSeqLT_AntisymmetryWithinHalfWindow(t *testing.T) {
 	}
 }
 
-// T-013: acceptable ACK 判定 SND.UNA < SEG.ACK =< SND.NXT
+// acceptable ACK 判定 SND.UNA < SEG.ACK =< SND.NXT
 func TestAcceptableAck_Boundaries(t *testing.T) {
 	const una, nxt uint32 = 100, 200
 	cases := []struct {
@@ -133,7 +133,7 @@ func TestAcceptableAck_Boundaries(t *testing.T) {
 	}
 }
 
-// T-013 (wrap): SND.UNA/SND.NXT がラップを跨ぐケース
+// (wrap): SND.UNA/SND.NXT がラップを跨ぐケース
 func TestAcceptableAck_Wrap(t *testing.T) {
 	const max uint32 = math.MaxUint32
 	una := max - 5 // 2^32-6

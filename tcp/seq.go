@@ -28,7 +28,7 @@ func SeqGT(a, b uint32) bool {
 	return SeqLT(b, a)
 }
 
-// AcceptableAck は SND.UNA < SEG.ACK =< SND.NXT を環状空間で判定する (RFC 9293 R-011)。
+// AcceptableAck は SND.UNA < SEG.ACK =< SND.NXT を環状空間で判定する (RFC 9293)。
 func AcceptableAck(una, ack, nxt uint32) bool {
 	return SeqLT(una, ack) && SeqLEQ(ack, nxt)
 }

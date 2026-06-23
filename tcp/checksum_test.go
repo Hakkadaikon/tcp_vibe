@@ -5,7 +5,7 @@ import (
 	"testing/quick"
 )
 
-// T-004: checksum 計算正当性 (GOLD 既知バイト列の手計算値一致)。
+// checksum 計算正当性 (GOLD 既知バイト列の手計算値一致)。
 // 教科書的な IPv4 ヘッダ例 (RFC 1071 系)。checksum フィールドは 0 にしてある。
 //
 //	4500 0073 0000 4000 4011 0000 c0a8 0001 c0a8 00c7
@@ -33,7 +33,7 @@ func TestChecksum_RFC1071Example(t *testing.T) {
 	}
 }
 
-// T-007: end-around carry とゼロ表現。合計が 0xFFFF なら補数 0x0000。
+// end-around carry とゼロ表現。合計が 0xFFFF なら補数 0x0000。
 func TestChecksum_EndAroundCarryAndZero(t *testing.T) {
 	// 0xFFFF + 0x0000 = 0xFFFF → 補数 0x0000。
 	if got := Checksum([]byte{0xFF, 0xFF, 0x00, 0x00}); got != 0x0000 {
@@ -46,7 +46,7 @@ func TestChecksum_EndAroundCarryAndZero(t *testing.T) {
 	}
 }
 
-// T-006: 16bit アラインメント (奇数長は末尾を 0 パディング)。
+// 16bit アラインメント (奇数長は末尾を 0 パディング)。
 // 末尾 1 バイト 0xAB は 0xAB00 として加算される。明示ゼロを足した偶数長と一致。
 func TestChecksum_OddLengthPadding(t *testing.T) {
 	odd := []byte{0x12, 0x34, 0xAB}
@@ -56,7 +56,7 @@ func TestChecksum_OddLengthPadding(t *testing.T) {
 	}
 }
 
-// T-005: 検証往復 + 1bit 反転検出 (property / metamorphic)。
+// 検証往復 + 1bit 反転検出。
 // 正しい checksum を埋めたバッファ全体の Checksum は 0 になる。
 // さらに 1bit でも反転すれば 0 でなくなる (誤り検出)。
 func TestChecksum_VerifyRoundTripAndBitFlip(t *testing.T) {
@@ -88,7 +88,7 @@ func TestChecksum_VerifyRoundTripAndBitFlip(t *testing.T) {
 	}
 }
 
-// T-004/T-005: 擬似ヘッダ込みの検証往復。
+// 擬似ヘッダ込みの検証往復。
 // セグメント内の checksum フィールド (offset 16) に計算値を埋めると、
 // 同じ擬似ヘッダで再計算した結果が 0 になる。
 func TestTCPChecksum_VerifyRoundTrip(t *testing.T) {

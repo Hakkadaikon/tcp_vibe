@@ -5,7 +5,7 @@ import (
 	"testing/quick"
 )
 
-// T-001 (GOLD): 既知の TCP ヘッダバイト列を Parse して各フィールドが一致する。
+// 既知の TCP ヘッダバイト列を Parse して各フィールドが一致する (GOLD)。
 func TestParseTCPHeader_Gold(t *testing.T) {
 	// src=0x3039(12345) dst=0x0050(80) seq=0x01020304 ack=0x05060708
 	// dataOffset=5, flags=SYN|ACK (0x12), window=0x7210, checksum=0, urg=0
@@ -37,7 +37,7 @@ func TestParseTCPHeader_Gold(t *testing.T) {
 	}
 }
 
-// T-001 (PBT): Marshal してから Parse すると元に戻る。
+// Marshal してから Parse すると元に戻る。
 func TestTCPHeader_RoundTrip(t *testing.T) {
 	f := func(sp, dp uint16, seq, ack uint32, flags uint8, win, urg uint16) bool {
 		h := TCPHeader{
@@ -55,7 +55,7 @@ func TestTCPHeader_RoundTrip(t *testing.T) {
 	}
 }
 
-// T-008: control bit 個別保存 (各フラグ単独 / 全部 / 組合せ)。
+// control bit 個別保存 (各フラグ単独 / 全部 / 組合せ)。
 func TestTCPHeader_ControlBits(t *testing.T) {
 	all := []Flags{FlagFIN, FlagSYN, FlagRST, FlagPSH, FlagACK, FlagURG}
 	// 各フラグ単独。
@@ -75,7 +75,7 @@ func TestTCPHeader_ControlBits(t *testing.T) {
 	if got, _ := ParseTCPHeader(h.Marshal()); got.Flags != every {
 		t.Errorf("all flags not preserved: %#02x", uint8(got.Flags))
 	}
-	// PBT: 任意の 6bit 組合せが保存される。
+	// 任意の 6bit 組合せが保存される。
 	f := func(bits uint8) bool {
 		fl := Flags(bits & 0x3F)
 		hh := TCPHeader{DataOffset: 5, Flags: fl}
@@ -87,7 +87,7 @@ func TestTCPHeader_ControlBits(t *testing.T) {
 	}
 }
 
-// T-003: data offset 境界 (5=20byte / 6=オプション付き / <5 はエラー)。
+// data offset 境界 (5=20byte / 6=オプション付き / <5 はエラー)。
 func TestParseTCPHeader_DataOffsetBoundary(t *testing.T) {
 	// DataOffset=6 → 24 バイトヘッダ (オプション 4 バイト)。
 	raw := make([]byte, 24)
@@ -107,7 +107,7 @@ func TestParseTCPHeader_DataOffsetBoundary(t *testing.T) {
 	}
 }
 
-// T-009: short read 拒否 (20byte OK / 19byte エラー)。宣言長 > 実バッファもエラー。
+// short read 拒否 (20byte OK / 19byte エラー)。宣言長 > 実バッファもエラー。
 func TestParseTCPHeader_ShortRead(t *testing.T) {
 	ok := make([]byte, 20)
 	ok[12] = 5 << 4

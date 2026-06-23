@@ -112,14 +112,14 @@ func TestSimultaneousOpenRecordsActiveOriginAndRstGoesToClosed(t *testing.T) {
 		t.Fatalf("同時オープンは SYN-RECEIVED のはず: got %v", c.State())
 	}
 	if c.Origin() != OriginActive {
-		t.Fatalf("由来は active のはず (M11): got %v", c.Origin())
+		t.Fatalf("由来は active のはず: got %v", c.Origin())
 	}
 	expectFlags(t, peer, Flags(FlagSYN|FlagACK))
 
 	// active 由来 SYN-RCVD の RST は CLOSED へ (LISTEN でない)。
 	c.onSegment(TCPHeader{Flags: Flags(FlagRST), SeqNum: c.RcvNxt()}, nil)
 	if c.State() != Closed {
-		t.Fatalf("active 由来 SYN-RCVD の RST は CLOSED へ落とすはず (M11): got %v", c.State())
+		t.Fatalf("active 由来 SYN-RCVD の RST は CLOSED へ落とすはず: got %v", c.State())
 	}
 }
 
@@ -298,7 +298,7 @@ func TestGracefulActiveClose(t *testing.T) {
 	_ = finSeq
 }
 
-// --- T-022 代表ケース: 許可されない遷移の拒否 ---
+// --- 代表ケース: 許可されない遷移の拒否 ---
 
 // LISTEN で bare ACK → RST 応答、遷移しない。
 func TestListenBareAckRepliesRst(t *testing.T) {

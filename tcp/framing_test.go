@@ -65,7 +65,7 @@ func equalPackets(a, b [][]byte) bool {
 	return true
 }
 
-// T-015 (PBT 主役): 任意の IPv4 パケット列を連結した 1 本のバイト列を、
+// 任意の IPv4 パケット列を連結した 1 本のバイト列を、
 // 乱数で決めた任意の分割点でチャンク分割して順に Push しても、
 // 復元パケット列が元の送信列と (順序・境界・バイト内容まで) 完全一致する。
 // これは「任意のチャンク分割で再構成パケット列が送信列と一致する」不変条件そのもの。
@@ -97,7 +97,7 @@ func TestFramer_ArbitrarySplitRestores(t *testing.T) {
 	}
 }
 
-// T-016: 部分読み境界。IP ヘッダ途中・本文途中・極端に 1byte ずつ feed しても同一復元。
+// 部分読み境界。IP ヘッダ途中・本文途中・極端に 1byte ずつ feed しても同一復元。
 func TestFramer_PartialReads(t *testing.T) {
 	p1 := makePacket(5, 10, 0x11)
 	p2 := makePacket(6, 0, 0x22) // ゼロ payload, オプション付きヘッダ長
@@ -126,7 +126,7 @@ func TestFramer_PartialReads(t *testing.T) {
 	}
 }
 
-// T-017: 連結到着。2 パケット 1 チャンク → 2 個復元。1.5 パケット → 1 個 + 残保持。
+// 連結到着。2 パケット 1 チャンク → 2 個復元。1.5 パケット → 1 個 + 残保持。
 func TestFramer_ConcatenatedArrival(t *testing.T) {
 	p1 := makePacket(5, 8, 0x33)
 	p2 := makePacket(5, 12, 0x44)
@@ -161,7 +161,7 @@ func TestFramer_ConcatenatedArrival(t *testing.T) {
 	}
 }
 
-// T-018: length 確定と trust boundary。
+// length 確定と trust boundary。
 // 宣言ちょうど → 1 個 / 宣言 > 実バッファ → 待つ / 宣言が maxPacket 超 → error。
 func TestFramer_LengthDecisionAndTrustBoundary(t *testing.T) {
 	// 宣言ちょうど。
@@ -216,7 +216,7 @@ func TestFramer_LengthDecisionAndTrustBoundary(t *testing.T) {
 	}
 }
 
-// T-019 (metamorphic): 同じバイト列を「1 回で feed」と「任意分割で feed」した
+// 同じバイト列を「1 回で feed」と「任意分割で feed」した
 // 結果が常に同一 (分割不変)。
 func TestFramer_SplitInvariance(t *testing.T) {
 	f := func(seed int64) bool {
@@ -247,7 +247,7 @@ func TestFramer_SplitInvariance(t *testing.T) {
 	}
 }
 
-// T-020: ゼロ長 payload / 最小 (20byte ヘッダのみ) / 最大セグメント。
+// ゼロ長 payload / 最小 (20byte ヘッダのみ) / 最大セグメント。
 func TestFramer_ZeroMinMax(t *testing.T) {
 	// 最小: 20byte ヘッダのみ、payload 0。
 	min := makePacket(5, 0, 0x01)

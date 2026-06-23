@@ -93,7 +93,7 @@ func (r *receiver) dispatch(pkt []byte) {
 		return
 	}
 	segment := pkt[int(ip.IHL)*4:]
-	// TCP チェックサム検証 (擬似ヘッダ込み)。不一致なら状態機械に届けない (INV-010)。
+	// TCP チェックサム検証 (擬似ヘッダ込み)。不一致なら状態機械に届けない。
 	// 正しいセグメントは checksum 欄込みの ones'-comp sum が 0 になる。
 	if TCPChecksum(ip.SrcAddr, ip.DstAddr, segment) != 0 {
 		return

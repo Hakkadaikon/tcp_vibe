@@ -27,8 +27,7 @@ type Clock func() time.Time
 
 // pipeLink はメモリ上でパケットを運ぶ Link。NewPipeLink で対になって生成され、
 // 一方の WritePacket が他方の ReadPacket に届く。
-// ponytail: 順序入替・欠落の注入は今は無し。TLA+ 側で敵対環境を網羅検査するので、
-// 必要になったら decorator で挟む。
+// ponytail: 順序入替・欠落の注入は今は無し。必要になったら decorator で挟む。
 type pipeLink struct {
 	mu     sync.Mutex
 	cond   *sync.Cond

@@ -114,7 +114,7 @@ func (c *Conn) Tick() {
 }
 
 // checkRetransmit は再送キュー先頭の RTO 満了を判定し、満了なら再送する。
-// 送信回数が上限 (R2) を超えたら接続を閉じる (RFC 9293 §3.8.1, R-091/093)。
+// 送信回数が上限 (R2) を超えたら接続を閉じる (RFC 9293 §3.8.1)。
 func (c *Conn) checkRetransmit() {
 	if len(c.tcb.retxQueue) == 0 {
 		return
@@ -144,7 +144,7 @@ func (c *Conn) checkRetransmit() {
 }
 
 // ackRetxQueue は acceptable ACK で完全確認された先頭エントリ群を除去する。
-// SEG.SEQ+SEG.LEN =< SEG.ACK を満たすぶんが確認済み (RFC 9293 §3.8.1, R-012)。
+// SEG.SEQ+SEG.LEN =< SEG.ACK を満たすぶんが確認済み (RFC 9293 §3.8.1)。
 // 除去後、残りがあれば RTO を初期値に戻して再起動、空ならタイマ停止。
 func (c *Conn) ackRetxQueue(ack uint32) {
 	removed := false
@@ -256,7 +256,7 @@ func (t *TCB) inWindow(seq uint32) bool {
 	return SeqLEQ(t.rcv.nxt, seq) && SeqLT(seq, t.rcv.nxt+uint32(t.rcv.wnd))
 }
 
-// acceptable は受理性テスト (RFC 9293 §3.10.7.4, R-001〜004) を判定する。
+// acceptable は受理性テスト (RFC 9293 §3.10.7.4) を判定する。
 func (t *TCB) acceptable(h TCPHeader, payload []byte) bool {
 	sl := segLen(h, payload)
 	switch {
@@ -328,7 +328,7 @@ func (c *Conn) onSegmentListen(h TCPHeader) {
 
 // onSegmentSynSent: SYN-SENT の処理 (RFC 9293 §3.10.7.3 + RFC 5961 §4.2)。
 func (c *Conn) onSegmentSynSent(h TCPHeader) {
-	// ACK field チェック: 自 SYN を確認する ACK か (R-035/036)。
+	// ACK field チェック: 自 SYN を確認する ACK か。
 	ackOK := false
 	if h.Flags.Has(FlagACK) {
 		// SEG.ACK =< ISS or SEG.ACK > SND.NXT は受理不可。
@@ -341,7 +341,7 @@ func (c *Conn) onSegmentSynSent(h TCPHeader) {
 		ackOK = true
 	}
 
-	// RST: ACK が自 SYN を確認しているときのみ受理 (R-113)。
+	// RST: ACK が自 SYN を確認しているときのみ受理。
 	if h.Flags.Has(FlagRST) {
 		if ackOK {
 			c.tcb.state = Closed
@@ -357,13 +357,13 @@ func (c *Conn) onSegmentSynSent(h TCPHeader) {
 	c.tcb.rcv.irs = h.SeqNum
 	c.tcb.rcv.nxt = h.SeqNum + 1
 	if ackOK {
-		// SYN,ACK で自 SYN が確認された → ESTABLISHED (R-037)。
+		// SYN,ACK で自 SYN が確認された → ESTABLISHED。
 		c.tcb.snd.una = h.AckNum
-		c.ackRetxQueue(h.AckNum) // 確認済み SYN を再送キューから除去 (R-012)
+		c.ackRetxQueue(h.AckNum) // 確認済み SYN を再送キューから除去
 		c.tcb.state = Established
 		c.sendAck()
 	} else {
-		// bare SYN (同時オープン) → SYN-RECEIVED (active origin) (R-038)。
+		// bare SYN (同時オープン) → SYN-RECEIVED (active origin)。
 		c.tcb.origin = OriginActive
 		c.tcb.state = SynReceived
 		c.send(Flags(FlagSYN|FlagACK), c.tcb.snd.iss, c.tcb.rcv.nxt)
@@ -373,7 +373,7 @@ func (c *Conn) onSegmentSynSent(h TCPHeader) {
 // onSegmentSynchronized は同期状態 (および SYN-RECEIVED) の固定処理順序。
 // RFC 9293 §3.10.7.4 + RFC 5961 の三チェックを順序通りに適用する。
 func (c *Conn) onSegmentSynchronized(h TCPHeader, payload []byte) {
-	// 1. 受理性テスト。受理不可かつ RST 無なら空 ACK を返し破棄 (R-006/072)。
+	// 1. 受理性テスト。受理不可かつ RST 無なら空 ACK を返し破棄。
 	//    RST は受理不可でも 5961 の窓判定へ進めるため別扱い。
 	if !c.tcb.acceptable(h, payload) && !h.Flags.Has(FlagRST) {
 		c.sendAck()
@@ -387,7 +387,7 @@ func (c *Conn) onSegmentSynchronized(h TCPHeader, payload []byte) {
 	}
 
 	// 3. SYN 処理 (RFC 5961 §4.2, 三チェックの (b))。同期状態で SYN は
-	//    seq によらず challenge ACK のみ。reset しない (R-114, INV-006)。
+	//    seq によらず challenge ACK のみ。reset しない。
 	if h.Flags.Has(FlagSYN) {
 		c.sendChallengeAck()
 		return
@@ -395,7 +395,7 @@ func (c *Conn) onSegmentSynchronized(h TCPHeader, payload []byte) {
 
 	// 4. ACK field 処理 (RFC 5961 §5.2 data injection を含む)。
 	if !h.Flags.Has(FlagACK) {
-		return // 同期状態で ACK off は破棄 (R-084)。
+		return // 同期状態で ACK off は破棄。
 	}
 	if !c.handleAck(h) {
 		return // ACK 受理範囲外: challenge ACK 済み、データ適用せず破棄。
@@ -416,16 +416,16 @@ func (c *Conn) onSegmentSynchronized(h TCPHeader, payload []byte) {
 }
 
 // handleRst は同期状態での RST を RFC 5961 §3.2 の三チェックで処理する。
-// reset の "根拠" を厳格化する (INV-005): SEG.SEQ=RCV.NXT のときだけ reset。
+// reset の "根拠" を厳格化する: SEG.SEQ=RCV.NXT のときだけ reset。
 func (c *Conn) handleRst(h TCPHeader) {
 	if !c.tcb.inWindow(h.SeqNum) {
-		return // 窓外 RST → silently drop (reset しない) (R-110)。
+		return // 窓外 RST → silently drop (reset しない)。
 	}
 	if h.SeqNum != c.tcb.rcv.nxt {
-		c.sendChallengeAck() // 窓内だが !=RCV.NXT → challenge のみ、reset 禁止 (R-112)。
+		c.sendChallengeAck() // 窓内だが !=RCV.NXT → challenge のみ、reset 禁止。
 		return
 	}
-	// SEG.SEQ=RCV.NXT → reset (R-111)。
+	// SEG.SEQ=RCV.NXT → reset。
 	c.resetConnection()
 }
 
@@ -440,9 +440,9 @@ func (c *Conn) resetConnection() {
 }
 
 // handleAck は ACK field を処理する。RFC 5961 §5.2 の受理範囲チェック
-// (SND.UNA-MAX.SND.WND) =< SEG.ACK =< SND.NXT を先に行い (R-115, INV-007)、
+// (SND.UNA-MAX.SND.WND) =< SEG.ACK =< SND.NXT を先に行い、
 // 範囲外なら challenge ACK を返して false を返す (SND.UNA を前進させない)。
-// 範囲内なら acceptable ACK (R-011) のときだけ SND.UNA を前進させ、状態遷移する。
+// 範囲内なら acceptable ACK のときだけ SND.UNA を前進させ、状態遷移する。
 func (c *Conn) handleAck(h TCPHeader) bool {
 	lo := c.tcb.snd.una - uint32(c.tcb.maxSndWnd)
 	if SeqLT(h.AckNum, lo) || SeqGT(h.AckNum, c.tcb.snd.nxt) {
@@ -450,10 +450,10 @@ func (c *Conn) handleAck(h TCPHeader) bool {
 		return false
 	}
 
-	// acceptable ack (SND.UNA < SEG.ACK =< SND.NXT) でのみ UNA 前進 (INV-001/002)。
+	// acceptable ack (SND.UNA < SEG.ACK =< SND.NXT) でのみ UNA 前進。
 	if AcceptableAck(c.tcb.snd.una, h.AckNum, c.tcb.snd.nxt) {
 		c.tcb.snd.una = h.AckNum
-		c.ackRetxQueue(h.AckNum) // 確認済みセグメントを再送キューから除去 (R-012)
+		c.ackRetxQueue(h.AckNum) // 確認済みセグメントを再送キューから除去
 	}
 	c.advanceStateOnAck(h)
 	return true
