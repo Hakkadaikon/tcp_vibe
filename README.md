@@ -87,3 +87,30 @@ aqua 本体だけは事前に PATH に通しておいてください。
 - このスタックはカーネルの TCP/IP を迂回するため、実際にパケットを送受信するには AF_PACKET 用に CAP_NET_RAW (通常は root) が必要です。
 - 動作確認はメモリ仮想リンク上で行っています。AF_PACKET ドライバは ARP と Ethernet フレームの完全な処理を実装しておらず、peer の MAC アドレスを固定した最小構成です。
 - データ転送はユーザバッファへの蓄積が最小限の実装です。状態遷移とプロトコルの正しさを主眼としており、転送性能やバッファ管理は作り込んでいません。
+
+## 実機での実通信手順
+
+root のある Linux 実機では、TUN デバイス経由で自作スタック同士の握手を実演できます。
+
+まず TUN デバイスを作り、アドレスを割り当てて起動します。
+
+```
+sudo ip tuntap add dev tun0 mode tun
+sudo ip addr add 10.0.0.1/24 dev tun0
+sudo ip link set tun0 up
+```
+
+カーネルの TCP/IP と同じサブネットを共有すると、自作スタック宛のセグメントにカーネルが RST を返すことがあります。
+自作スタック同士だけで通信するなら不要ですが、カーネル TCP と混在させるときは、対象サブネット発の RST を抑止します。
+
+```
+sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 10.0.0.0/24 -j DROP
+```
+
+デモは server (受動オープン) と client (能動オープン) の 2 モードを持ちます。
+別々の TUN デバイスを用意し、一方を server、もう一方を client として起動すると、握手から close までが進みます。
+
+```
+sudo ./cmd/tcpdemo --mode=server --tun=tun0 --local-ip=10.0.0.1 --local-port=9000 --remote-ip=10.0.0.2 --remote-port=9001
+sudo ./cmd/tcpdemo --mode=client --tun=tun1 --local-ip=10.0.0.2 --local-port=9001 --remote-ip=10.0.0.1 --remote-port=9000
+```
