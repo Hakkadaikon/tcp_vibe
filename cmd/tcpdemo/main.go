@@ -22,7 +22,12 @@ func main() {
 	localPort := flag.Uint("local-port", 9000, "自分のポート")
 	remoteIP := flag.String("remote-ip", "10.0.0.2", "相手の IPv4 アドレス")
 	remotePort := flag.Uint("remote-port", 9001, "相手のポート")
+	debug := flag.Bool("debug", false, "TCP スタックの診断ログを出す (受信/送信/TUN I/O)")
 	flag.Parse()
+
+	if *debug {
+		tcp.Debug = func(f string, a ...any) { log.Printf("[tcp] "+f, a...) }
+	}
 
 	local := tcp.Endpoint{IP: parseIP(*localIP), Port: uint16(*localPort)}
 	remote := tcp.Endpoint{IP: parseIP(*remoteIP), Port: uint16(*remotePort)}
@@ -66,11 +71,17 @@ func main() {
 }
 
 // waitFor は conn が want になるまで timeout まで待つ。到達したら true。
+// 1 秒ごとに現在の状態をログに出し、どこで詰まっているか分かるようにする。
 func waitFor(conn *tcp.Conn, want tcp.State, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
+	nextReport := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
 		if conn.State() == want {
 			return true
+		}
+		if time.Now().After(nextReport) {
+			log.Printf("待機中: 現在 %v (目標 %v)", conn.State(), want)
+			nextReport = nextReport.Add(1 * time.Second)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

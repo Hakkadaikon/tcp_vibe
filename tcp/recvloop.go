@@ -101,6 +101,7 @@ func (r *receiver) loop() {
 	for {
 		chunk, err := r.link.ReadPacket()
 		if err != nil {
+			debugf("recv: ReadPacket エラー: %v", err)
 			return // ErrLinkClosed 等。link が閉じたらループ終了。
 		}
 		packets, ferr := r.framer.Push(chunk)
@@ -109,6 +110,7 @@ func (r *receiver) loop() {
 			r.dispatch(pkt)
 		}
 		if ferr != nil {
+			debugf("recv: Framer.Push エラー: %v", ferr)
 			// maxPacket 超など、続きを待っても回復しない接続エラー。理由を残して停止。
 			r.mu.Lock()
 			r.err = ferr
@@ -124,20 +126,26 @@ func (r *receiver) loop() {
 func (r *receiver) dispatch(pkt []byte) {
 	ip, err := ParseIPv4Header(pkt)
 	if err != nil {
+		debugf("recv: 破棄 (IPv4 パース失敗): len=%d err=%v", len(pkt), err)
 		return // 不正な IPv4 ヘッダ (チェックサム不一致等) は破棄。
 	}
+	debugf("recv: パケット len=%d %s -> %s proto=%d", len(pkt), ipStr(ip.SrcAddr), ipStr(ip.DstAddr), ip.Protocol)
 	if ip.Protocol != 6 { // 6 = TCP
+		debugf("recv: 破棄 (非TCP proto=%d)", ip.Protocol)
 		return
 	}
 	segment := pkt[int(ip.IHL)*4:]
 	// TCP チェックサム検証 (擬似ヘッダ込み)。不一致なら状態機械に届けない。
 	// 正しいセグメントは checksum 欄込みの ones'-comp sum が 0 になる。
-	if TCPChecksum(ip.SrcAddr, ip.DstAddr, segment) != 0 {
+	if sum := TCPChecksum(ip.SrcAddr, ip.DstAddr, segment); sum != 0 {
+		debugf("recv: 破棄 (TCP チェックサム不一致 計算値=0x%04x)", sum)
 		return
 	}
 	h, err := ParseTCPHeader(segment)
 	if err != nil {
+		debugf("recv: 破棄 (TCP ヘッダパース失敗): err=%v", err)
 		return // 不正な TCP ヘッダは破棄。
 	}
+	debugf("recv: onSegment flags=%s seq=%d ack=%d", flagsStr(h.Flags), h.SeqNum, h.AckNum)
 	r.conn.onSegment(h, segment[int(h.DataOffset)*4:])
 }

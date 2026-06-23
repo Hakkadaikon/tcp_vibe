@@ -227,6 +227,7 @@ func (c *Conn) writeSeg(flags Flags, seq, ack uint32) {
 		SrcAddr:     c.local.IP,
 		DstAddr:     c.remote.IP,
 	}
+	debugf("send: flags=%s seq=%d ack=%d dst=%s:%d", flagsStr(flags), seq, ack, ipStr(c.remote.IP), c.ports.dst)
 	_ = c.link.WritePacket(append(ip.Marshal(), seg...))
 }
 
