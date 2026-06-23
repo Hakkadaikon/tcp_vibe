@@ -42,31 +42,30 @@ func Serve(conn *Conn, maxPacket int) (stop func()) {
 // receiver は Conn の受信ループを 1 本の goroutine で駆動する。
 //
 // handoff の並行設計を実体化する:
-//   - 受信は単一 goroutine。link.ReadPacket を直列に呼ぶので Framer の状態 (buf)
-//     は 1 goroutine しか触らず、ロック不要。
+//   - 受信は単一 goroutine。link.ReadPacket を直列に呼び、1 read = 1 IP パケット
+//     (現状の Link はすべて境界を保つ) を直接 dispatch する。
 //   - 状態機械への入口 onSegment は Conn の mutex で 1 クリティカルセクションに直列化
 //     される。ユーザコール (State 等の観測・送信) と受信ループは mutex 越しに競合しない。
 //
 // receiver 自身は Conn を改変せず、外から onSegment を呼んで駆動する薄い層。
 type receiver struct {
-	conn   *Conn
-	link   Link
-	framer *Framer
+	conn *Conn
+	link Link
 
 	wg   sync.WaitGroup
 	once sync.Once // Stop の冪等化
 
 	mu  sync.Mutex // err を守る (受信 goroutine が書き、観測側が読む)
-	err error      // ループ終了理由 (正常終了は nil。Framer エラー等で停止したら非 nil)
+	err error      // ループ終了理由 (正常終了は nil)
 }
 
 // newReceiver は link から TCP セグメントを読んで conn.onSegment へ流す受信器を作る。
-// maxPacket は Framer の 1 パケット上限。
+// maxPacket は将来のストリーム型 Link 用に予約 (現状の境界保持 Link では未使用)。
 func newReceiver(conn *Conn, link Link, maxPacket int) *receiver {
+	_ = maxPacket
 	return &receiver{
-		conn:   conn,
-		link:   link,
-		framer: NewFramer(maxPacket),
+		conn: conn,
+		link: link,
 	}
 }
 
@@ -87,36 +86,24 @@ func (r *receiver) Stop() {
 	r.wg.Wait()
 }
 
-// Err はループ終了理由を返す。正常終了 (link クローズ) は nil、Framer のエラー
-// (maxPacket 超等) で停止した場合は非 nil。Stop 後に観測すること。
+// Err はループ終了理由を返す。正常終了 (link クローズ) は nil。Stop 後に観測すること。
 func (r *receiver) Err() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.err
 }
 
-// loop は link からバイト列を読み、IPv4 パケット境界で再分割し、TCP セグメントを
-// 状態機械へ届ける。link クローズで正常終了、Framer エラーで停止する。
+// loop は link から 1 read = 1 IP パケットを読み、そのまま dispatch へ渡す。
+// link クローズで正常終了する。非 IPv4 や不正パケットは dispatch が捨てて継続するので、
+// 受信ループ自体はパケット単位で死なない (TUN は IPv6 等の非 IPv4 も普通に届ける)。
 func (r *receiver) loop() {
 	for {
-		chunk, err := r.link.ReadPacket()
+		pkt, err := r.link.ReadPacket()
 		if err != nil {
 			debugf("recv: ReadPacket エラー: %v", err)
 			return // ErrLinkClosed 等。link が閉じたらループ終了。
 		}
-		packets, ferr := r.framer.Push(chunk)
-		// Framer はエラー時も切り出せたパケットを返す。先に届ける。
-		for _, pkt := range packets {
-			r.dispatch(pkt)
-		}
-		if ferr != nil {
-			debugf("recv: Framer.Push エラー: %v", ferr)
-			// maxPacket 超など、続きを待っても回復しない接続エラー。理由を残して停止。
-			r.mu.Lock()
-			r.err = ferr
-			r.mu.Unlock()
-			return
-		}
+		r.dispatch(pkt)
 	}
 }
 

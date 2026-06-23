@@ -58,42 +58,49 @@ func TestReceiveLoopDeliversSynToStateMachine(t *testing.T) {
 	waitState(t, c, SynReceived)
 }
 
-// フレーミング連携: 1 セグメントを複数チャンクに分割して書いても 1 つとして届く。
-func TestReceiveLoopReassemblesSplitSegment(t *testing.T) {
-	c, peer, _ := newTestReceiver(t)
-
-	pkt := buildSegment(TCPHeader{Flags: Flags(FlagSYN), SeqNum: 3000, DataOffset: 5}, nil)
-	// パケットを途中で割って 2 回に分けて送る (部分到着)。
-	mid := len(pkt) / 2
-	if err := peer.WritePacket(pkt[:mid]); err != nil {
-		t.Fatalf("WritePacket(前半) 失敗: %v", err)
-	}
-	if c.State() != Listen {
-		t.Fatalf("部分到着の段階ではまだ LISTEN のはず: got %v", c.State())
-	}
-	if err := peer.WritePacket(pkt[mid:]); err != nil {
-		t.Fatalf("WritePacket(後半) 失敗: %v", err)
-	}
-
-	waitState(t, c, SynReceived)
-}
-
-// フレーミング連携: 複数セグメントを 1 回の書き込みに連結しても全部届く。
-// SYN → (SYN-RECEIVED) → ACK → ESTABLISHED を 1 チャンクで送る。
-func TestReceiveLoopHandlesConcatenatedSegments(t *testing.T) {
+// パケット境界: 現状の Link は 1 WritePacket = 1 IP パケットの境界を保つ。
+// 2 回 WritePacket すれば 2 パケットがそれぞれ処理される。
+// SYN → (SYN-RECEIVED) → ACK → ESTABLISHED を 2 回に分けて送る。
+func TestReceiveLoopProcessesEachPacketSeparately(t *testing.T) {
 	c, peer, _ := newTestReceiver(t)
 
 	syn := buildSegment(TCPHeader{Flags: Flags(FlagSYN), SeqNum: 3000, DataOffset: 5}, nil)
+	if err := peer.WritePacket(syn); err != nil {
+		t.Fatalf("WritePacket(syn) 失敗: %v", err)
+	}
+	waitState(t, c, SynReceived)
+
 	// SYN-RECEIVED で送る SYN,ACK の seq=ISS(7000)。相手の ACK は ack=7001。
 	ack := buildSegment(TCPHeader{
 		Flags: Flags(FlagACK), SeqNum: 3001, AckNum: 7001, DataOffset: 5,
 	}, nil)
+	if err := peer.WritePacket(ack); err != nil {
+		t.Fatalf("WritePacket(ack) 失敗: %v", err)
+	}
+	waitState(t, c, Established)
+}
 
-	if err := peer.WritePacket(append(syn, ack...)); err != nil {
-		t.Fatalf("WritePacket 失敗: %v", err)
+// 回帰 (今回のバグ): 非 IPv4 パケット (IPv6 等) を受け取っても受信ループは死なず、
+// 後続の正常な SYN が届いて SYN-RECEIVED に到達する。
+// 旧実装は ReadPacket の結果を Framer.Push に通し、非 IPv4 で致命的エラーが返ると
+// loop() が return して受信ループごと停止していた。
+func TestReceiveLoopSurvivesNonIPv4Packet(t *testing.T) {
+	c, peer, _ := newTestReceiver(t)
+
+	// version=6 (IPv6) の先頭バイトを持つパケット。ParseIPv4Header は非 IPv4 として拒否。
+	ipv6ish := make([]byte, 48)
+	ipv6ish[0] = 0x60 // 上位 4bit = version = 6
+	if err := peer.WritePacket(ipv6ish); err != nil {
+		t.Fatalf("WritePacket(ipv6) 失敗: %v", err)
 	}
 
-	waitState(t, c, Established)
+	// 受信ループが死んでいなければ、この正常 SYN が届いて遷移する。
+	good := buildSegment(TCPHeader{Flags: Flags(FlagSYN), SeqNum: 3000, DataOffset: 5}, nil)
+	if err := peer.WritePacket(good); err != nil {
+		t.Fatalf("WritePacket(good) 失敗: %v", err)
+	}
+
+	waitState(t, c, SynReceived)
 }
 
 // 不正パケット: IPv4 チェックサム不一致 / 短すぎ / TCP でない を混ぜても接続は壊れず、
@@ -102,14 +109,13 @@ func TestReceiveLoopDropsInvalidPackets(t *testing.T) {
 	c, peer, _ := newTestReceiver(t)
 
 	// (1) IPv4 チェックサムを壊したパケット。ParseIPv4Header が拒否し破棄される。
-	//     TotalLength は整合させ Framer は 1 パケットとして切り出せるようにする。
 	badIP := buildSegment(TCPHeader{Flags: Flags(FlagSYN), SeqNum: 1111, DataOffset: 5}, nil)
 	badIP[10] ^= 0xFF // IPv4 ヘッダチェックサム域を破壊
 	if err := peer.WritePacket(badIP); err != nil {
 		t.Fatalf("WritePacket(badIP) 失敗: %v", err)
 	}
 
-	// (2) TCP でないパケット (Protocol=17 UDP)。Framer は通すが dispatch で破棄。
+	// (2) TCP でないパケット (Protocol=17 UDP)。dispatch が proto!=6 で破棄。
 	udp := IPv4Header{Protocol: 17, TotalLength: 40, SrcAddr: rlSrc, DstAddr: rlDst, TTL: 64}
 	udpPkt := append(udp.Marshal(), make([]byte, 20)...) // 中身は何でもよい (届かない)
 	if err := peer.WritePacket(udpPkt); err != nil {
