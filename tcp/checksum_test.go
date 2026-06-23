@@ -23,6 +23,16 @@ func TestChecksum_Gold(t *testing.T) {
 	}
 }
 
+// RFC 1071 の計算例で fold (carry 畳み込み) が正しいことを固定する。
+// ワード列 [0x0001,0xf203,0xf4f5,0xf6f7] → ones'-comp sum 0xddf2、補数 0x220d。
+func TestChecksum_RFC1071Example(t *testing.T) {
+	data := []byte{0x00, 0x01, 0xf2, 0x03, 0xf4, 0xf5, 0xf6, 0xf7}
+	const want uint16 = 0x220d
+	if got := Checksum(data); got != want {
+		t.Errorf("RFC1071 example: Checksum = %#04x want %#04x", got, want)
+	}
+}
+
 // T-007: end-around carry とゼロ表現。合計が 0xFFFF なら補数 0x0000。
 func TestChecksum_EndAroundCarryAndZero(t *testing.T) {
 	// 0xFFFF + 0x0000 = 0xFFFF → 補数 0x0000。

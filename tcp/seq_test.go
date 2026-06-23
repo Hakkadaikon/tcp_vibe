@@ -86,6 +86,35 @@ func TestSeqLT_Antisymmetry(t *testing.T) {
 	}
 }
 
+// 環状比較の subtlety: 対蹠点 (距離ちょうど 2^31) では順序が定まらない
+// (RFC 9293:876 "subtleties to computer modulo arithmetic")。
+// 本実装の "距離 < 2^31" 定義では対蹠点は両方向 false (三分律が破れる: a≠b なのに
+// a<b でも b<a でもない)。TCP は窓を 2^31 未満に保つことでこの領域を踏まない。
+// 回帰防止に「対蹠点では信頼できる順序が出ない」ことを固定する。
+func TestSeqLT_AntipodeIsAmbiguous(t *testing.T) {
+	const half uint32 = 1 << 31
+	a, b := uint32(0), half // a-b = 2^31 (対蹠点)
+	if SeqLT(a, b) || SeqLT(b, a) {
+		t.Errorf("対蹠点では順序が定まらない (両方向 false) のはず: SeqLT(%d,%d)=%v SeqLT(%d,%d)=%v",
+			a, b, SeqLT(a, b), b, a, SeqLT(b, a))
+	}
+}
+
+// 窓を 2^31 未満に保てば反対称律は成立する (Lean で証明した境界)。
+func TestSeqLT_AntisymmetryWithinHalfWindow(t *testing.T) {
+	f := func(a uint32, d uint32) bool {
+		d = d % (1 << 31) // 半周未満に制限
+		if d == 0 {
+			return true
+		}
+		b := a + d
+		return !(SeqLT(a, b) && SeqLT(b, a)) // 半周内なら一方向のみ
+	}
+	if err := quick.Check(f, &quick.Config{MaxCount: 5000}); err != nil {
+		t.Error(err)
+	}
+}
+
 // T-013: acceptable ACK 判定 SND.UNA < SEG.ACK =< SND.NXT
 func TestAcceptableAck_Boundaries(t *testing.T) {
 	const una, nxt uint32 = 100, 200

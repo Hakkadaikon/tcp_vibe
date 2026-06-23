@@ -3,6 +3,12 @@ package tcp
 // TCP シーケンス番号は 32bit 環状空間 (modulo 2^32) で比較する (RFC 9293 §3.4)。
 // 比較は RFC 1982 風: a < b は「b-a の wrap 差が 0 でなく半周 (2^31) 未満」。
 // uint32 の自然なオーバーフロー減算がそのまま modulo 2^32 になる。
+//
+// 注意: 環状ゆえ順序は無条件には全順序にならない。対蹠点 (a-b が ちょうど 2^31)
+// では本実装は両方向 false となり順序が定まらない (RFC 9293:876 の
+// "subtleties to computer modulo arithmetic")。TCP はこれを「窓幅を 2^31 未満に
+// 保つ」不変条件で回避する。本実装の受信窓は uint16 (最大 65535 << 2^31) なので
+// 常に安全 (TCB.inWindow が uint16 窓でこの前提を満たす)。
 
 const halfSeqSpace uint32 = 1 << 31 // 2^31
 
