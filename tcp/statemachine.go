@@ -170,8 +170,8 @@ func (c *Conn) checkRetransmit() {
 		c.tcb.curRTO = 0
 		return
 	}
-	// 先頭を再送し、回数・送信時刻を更新、RTO を倍化 (上限 maxRTO)。
-	c.writeSeg(front.flags, front.seq, c.tcb.rcv.nxt)
+	// 先頭を再送し、回数・送信時刻を更新、RTO を倍化 (上限 maxRTO)。payload 込みで再送。
+	c.writeSeg(front.flags, front.seq, c.tcb.rcv.nxt, front.payload)
 	front.retries++
 	front.sentAt = c.tcb.clock()
 	if c.tcb.curRTO < maxRTO {
@@ -209,13 +209,19 @@ func (c *Conn) ackRetxQueue(ack uint32) {
 
 // --- 送信ヘルパ ---
 
-// send は 1 セグメントを送る。ヘッダのみ (本タスクではペイロード送信は扱わない)。
-// 送信は mutex 保持中に呼ぶこと。seq を消費するセグメント (SYN/FIN/データ) は
-// 再送キューに積み、RTO タイマを起動する (RFC 9293 §3.8.1)。
+// send は 1 セグメント (ヘッダのみ) を送る。データを載せる送信は sendData を使う。
+// 送信は mutex 保持中に呼ぶこと。seq を消費するセグメント (SYN/FIN) は再送キューに
+// 積み、RTO タイマを起動する (RFC 9293 §3.8.1)。
 func (c *Conn) send(flags Flags, seq, ack uint32) {
-	c.writeSeg(flags, seq, ack)
+	c.sendData(flags, seq, ack, nil)
+}
+
+// sendData は payload を載せて 1 セグメントを送る。seq を占めるセグメント
+// (SYN/FIN/データ) は payload ごと再送キューに積み RTO タイマを起動する。
+func (c *Conn) sendData(flags Flags, seq, ack uint32, payload []byte) {
+	c.writeSeg(flags, seq, ack, payload)
 	// seq を占めるセグメントだけ再送対象。ACK/RST 単独や challenge ACK は積まない。
-	seg := retxSeg{seq: seq, flags: flags, sentAt: c.tcb.clock()}
+	seg := retxSeg{seq: seq, flags: flags, payload: payload, sentAt: c.tcb.clock()}
 	if seg.seqLen() == 0 {
 		return
 	}
@@ -228,7 +234,7 @@ func (c *Conn) send(flags Flags, seq, ack uint32) {
 // writeSeg はヘッダを組んで 1 セグメントを完全な IPv4 パケットとしてリンクへ書く
 // (キュー操作なし)。TCP チェックサムを擬似ヘッダ込みで埋めてから IPv4 ヘッダで包む。
 // これにより送出が受信ループ (IPv4 を剥がし TCP チェックサムを検証する) の前提と一致する。
-func (c *Conn) writeSeg(flags Flags, seq, ack uint32) {
+func (c *Conn) writeSeg(flags Flags, seq, ack uint32, payload []byte) {
 	h := TCPHeader{
 		SrcPort:    c.ports.src,
 		DstPort:    c.ports.dst,
@@ -238,7 +244,7 @@ func (c *Conn) writeSeg(flags Flags, seq, ack uint32) {
 		Flags:      flags,
 		Window:     c.tcb.rcv.wnd,
 	}
-	seg := h.Marshal()
+	seg := append(h.Marshal(), payload...)
 	putBe16(seg, 16, TCPChecksum(c.local.IP, c.remote.IP, seg))
 	ip := IPv4Header{
 		Protocol:    6, // TCP
@@ -373,6 +379,7 @@ func (c *Conn) onSegmentListen(h TCPHeader) {
 		c.tcb.snd.nxt = c.tcb.snd.iss + 1
 		c.tcb.origin = OriginPassive
 		c.tcb.state = SynReceived
+		c.initSendWindow(h) // 相手の広告窓で SND.WND を初期化
 		c.send(Flags(FlagSYN|FlagACK), c.tcb.snd.iss, c.tcb.rcv.nxt)
 	}
 }
@@ -411,6 +418,7 @@ func (c *Conn) onSegmentSynSent(h TCPHeader) {
 		// SYN,ACK で自 SYN が確認された → ESTABLISHED。
 		c.tcb.snd.una = h.AckNum
 		c.ackRetxQueue(h.AckNum) // 確認済み SYN を再送キューから除去
+		c.initSendWindow(h)      // 相手の広告窓で SND.WND を初期化
 		c.tcb.state = Established
 		c.tcb.reachedEstablished = true
 		c.sendAck()
@@ -453,16 +461,14 @@ func (c *Conn) onSegmentSynchronized(h TCPHeader, payload []byte) {
 		return // ACK 受理範囲外: challenge ACK 済み、データ適用せず破棄。
 	}
 
-	// 5. text 処理。
-	// ponytail: 本タスクは状態遷移が主眼。受信データの user buffer 蓄積は別タスク。
-	//           ここでは窓内データ分だけ RCV.NXT を前進させ ACK を返す最小処理に留める。
-	if len(payload) > 0 && h.SeqNum == c.tcb.rcv.nxt {
-		c.tcb.rcv.nxt += uint32(len(payload))
-		c.sendAck()
+	// 5. text 処理。窓内データを再組立てバッファへ取り込み RCV.NXT を前進させる。
+	if len(payload) > 0 {
+		c.acceptText(h, payload)
 	}
 
-	// 6. FIN 処理。
-	if h.Flags.Has(FlagFIN) {
+	// 6. FIN 処理。FIN の seq まで in-order に届いた (RCV.NXT が FIN seq に追いついた)
+	//    ときだけ FIN を消費する。先行 FIN (手前にデータ欠けがある) はまだ消費しない。
+	if h.Flags.Has(FlagFIN) && h.SeqNum+segLen(h, payload)-1 == c.tcb.rcv.nxt {
 		c.handleFin(h)
 	}
 }
@@ -504,11 +510,41 @@ func (c *Conn) handleAck(h TCPHeader) bool {
 
 	// acceptable ack (SND.UNA < SEG.ACK =< SND.NXT) でのみ UNA 前進。
 	if AcceptableAck(c.tcb.snd.una, h.AckNum, c.tcb.snd.nxt) {
+		oldUna := c.tcb.snd.una
 		c.tcb.snd.una = h.AckNum
 		c.ackRetxQueue(h.AckNum) // 確認済みセグメントを再送キューから除去
+		c.releaseAckedSend(oldUna)
 	}
+	// 送信窓を更新する。相手の広告窓を受け取り、空いたぶんを送り出す。
+	c.updateSendWindow(h)
 	c.advanceStateOnAck(h)
+	c.flushSend() // 窓が空いた / 確認が進んだぶん未送信データを送る。
 	return true
+}
+
+// initSendWindow は握手で受け取った SYN/SYN,ACK の広告窓で SND.WND を初期化する
+// (RFC 9293 §3.10.7.3/4)。以後の更新は updateSendWindow が WL1/WL2 で順序判定する。
+func (c *Conn) initSendWindow(h TCPHeader) {
+	c.tcb.snd.wnd = h.Window
+	c.tcb.snd.wl1 = h.SeqNum
+	c.tcb.snd.wl2 = h.AckNum
+	if h.Window > c.tcb.maxSndWnd {
+		c.tcb.maxSndWnd = h.Window
+	}
+}
+
+// updateSendWindow は相手の広告窓で SND.WND を更新する (RFC 9293 §3.10.7.4)。
+// 古い窓更新を弾くため SND.WL1/WL2 で順序を見る。maxSndWnd も最大値を追う。
+func (c *Conn) updateSendWindow(h TCPHeader) {
+	if SeqLT(c.tcb.snd.wl1, h.SeqNum) ||
+		(c.tcb.snd.wl1 == h.SeqNum && SeqLEQ(c.tcb.snd.wl2, h.AckNum)) {
+		c.tcb.snd.wnd = h.Window
+		c.tcb.snd.wl1 = h.SeqNum
+		c.tcb.snd.wl2 = h.AckNum
+	}
+	if h.Window > c.tcb.maxSndWnd {
+		c.tcb.maxSndWnd = h.Window
+	}
 }
 
 // finAcked は自分が送った FIN がこの ACK で確認されたか。FIN は SND.NXT-1 を占める。
@@ -541,7 +577,9 @@ func (c *Conn) advanceStateOnAck(h TCPHeader) {
 // 状態を進める (RFC 9293 §3.10.7.4)。
 func (c *Conn) handleFin(h TCPHeader) {
 	// FIN は受信窓左端で消費される。text 段で payload 分は前進済みなので
-	// FIN 1 seq 分だけ RCV.NXT を進める。
+	// FIN 1 seq 分だけ RCV.NXT を進める。Recv の EOF 判定用に FIN seq を記録する。
+	c.tcb.peerFin = true
+	c.tcb.peerFinSeq = c.tcb.rcv.nxt
 	c.tcb.rcv.nxt++
 	c.sendAck()
 	switch c.tcb.state {

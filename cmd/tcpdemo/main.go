@@ -7,6 +7,7 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -60,12 +61,22 @@ func main() {
 	}
 }
 
-// runClient は能動側のフロー。握手成立を確認したら graceful close を主導する。
+// runClient は能動側のフロー。握手成立後にメッセージを送り、graceful close を主導する。
 func runClient(conn *tcp.Conn) {
 	if !waitEstablished(conn, 30*time.Second) {
 		log.Fatalf("握手が成立しなかった: 現在 %v", conn.State())
 	}
 	log.Printf("ESTABLISHED 到達 (握手成立)")
+
+	msg := []byte("hello from client\n")
+	n, err := conn.Send(msg)
+	if err != nil {
+		log.Printf("Send 失敗: %v", err)
+	} else {
+		log.Printf("送信: %q (%d バイト)", msg, n)
+	}
+	// FIN より先に相手へデータが届くよう少し待つ。
+	time.Sleep(500 * time.Millisecond)
 
 	log.Printf("close 開始: client から FIN を送る")
 	conn.Close()
@@ -98,8 +109,26 @@ func runServer(conn *tcp.Conn) {
 	}
 	log.Printf("ESTABLISHED 到達 (握手成立)")
 
-	// 相手が FIN を送って CLOSE-WAIT になるまで待ち、そこで自分も閉じる。
-	if !waitState(conn, tcp.CloseWait, 30*time.Second) {
+	// 相手が FIN を送って CLOSE-WAIT になるまで Recv をポーリングし、受信データをログに出す。
+	var received []byte
+	buf := make([]byte, 4096)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && conn.State() != tcp.CloseWait {
+		n, err := conn.Recv(buf)
+		if n > 0 {
+			received = append(received, buf[:n]...)
+		}
+		if err == io.EOF {
+			break
+		}
+		if n == 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if len(received) > 0 {
+		log.Printf("受信: %q (%d バイト)", received, len(received))
+	}
+	if conn.State() != tcp.CloseWait {
 		log.Printf("相手の close を待たずタイムアウト: 現在 %v", conn.State())
 		return
 	}

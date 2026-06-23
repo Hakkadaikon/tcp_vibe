@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"bytes"
 	"testing"
 	"time"
 )
@@ -70,4 +71,65 @@ func TestLoopbackHandshakeAndClose(t *testing.T) {
 	if client.State() != Closed {
 		t.Fatalf("2MSL 満了後は CLOSED のはず: got %v", client.State())
 	}
+}
+
+// recvAll は want と同じ長さになるまで Recv をポーリングして読み切る。
+// 受信ループは別 goroutine が回しているので sleep で譲りながら待つ。
+func recvAll(t *testing.T, c *Conn, want int) []byte {
+	t.Helper()
+	var got []byte
+	buf := make([]byte, 4096)
+	for i := 0; i < 2000 && len(got) < want; i++ {
+		n, _ := c.Recv(buf)
+		if n > 0 {
+			got = append(got, buf[:n]...)
+			continue
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return got
+}
+
+// 握手後に実データを流し、相手側で送信順のバイト列が読めることを確認する。
+// 小さいメッセージ・複数回 Send・MSS 超の大きいデータ (複数セグメント分割) を通す。
+func TestLoopbackDataTransfer(t *testing.T) {
+	clientLink, serverLink := NewPipeLink()
+	fc := newFakeClock()
+
+	client := NewConn(clientLink, fc.Now, lbClient, lbServer)
+	server := NewConn(serverLink, fc.Now, lbServer, lbClient)
+
+	cr := newReceiver(client, clientLink, 65535)
+	sr := newReceiver(server, serverLink, 65535)
+	cr.Start()
+	sr.Start()
+	t.Cleanup(cr.Stop)
+	t.Cleanup(sr.Stop)
+
+	server.PassiveOpen()
+	client.ActiveOpen(1000)
+	waitStateSleep(t, client, Established)
+	waitStateSleep(t, server, Established)
+
+	// 1) 小さいメッセージ。
+	msg := []byte("hello world")
+	if _, err := client.Send(msg); err != nil {
+		t.Fatalf("Send 失敗: %v", err)
+	}
+	got := recvAll(t, server, len(msg))
+	if !bytes.Equal(got, msg) {
+		t.Fatalf("受信不一致: got %q want %q", got, msg)
+	}
+	t.Logf("小メッセージ受信 OK: %q", got)
+
+	// 2) 複数回 Send + MSS 超の大きいデータ。連結して順序通りに届くこと。
+	big := bytes.Repeat([]byte("0123456789"), defaultMSS/5) // > 2*MSS
+	if _, err := client.Send(big); err != nil {
+		t.Fatalf("Send (big) 失敗: %v", err)
+	}
+	gotBig := recvAll(t, server, len(big))
+	if !bytes.Equal(gotBig, big) {
+		t.Fatalf("大データ受信不一致: got %d bytes want %d", len(gotBig), len(big))
+	}
+	t.Logf("大データ受信 OK: %d バイト (MSS=%d なので複数セグメント)", len(gotBig), defaultMSS)
 }

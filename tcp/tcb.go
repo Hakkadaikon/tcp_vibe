@@ -120,20 +120,40 @@ type TCB struct {
 	// challengeWindowStart は現在の計数窓の開始時刻、challengeCount は窓内送出数。
 	challengeWindowStart time.Time
 	challengeCount       int
+
+	// sndBuf は未送信のユーザデータ。Send で追記し flushSend が窓と MSS の範囲で
+	// セグメント化して送る。送出済みは ACK で SND.UNA が進んだぶん解放する。
+	sndBuf []byte
+	// rcvBuf は再組立て済みで Recv 待ちのデータ。RCV.NXT まで連続したぶんがここに入る。
+	rcvBuf []byte
+	// oooSegs は窓内だが順番待ちの保持セグメント (seq 昇順)。RCV.NXT が追いつくと
+	// rcvBuf へ取り込んで RCV.NXT を前進させる (out-of-order 再組立て)。
+	oooSegs []segFragment
+
+	// peerFinSeq は相手 FIN が占める seq。peerFin が true のとき有効。
+	// この seq まで読み切ったら Recv は EOF を返す。
+	peerFin    bool
+	peerFinSeq uint32
 }
 
-// retxSeg は再送キューの 1 エントリ。再送に必要な最小情報だけ持つ。
-// ponytail: payload は持たない。send はヘッダのみで seq を占めるのは SYN/FIN だけ。データ送信時に payload を足す。
+// segFragment は受信した連続バイト片 (seq とデータ)。out-of-order 再組立て用。
+type segFragment struct {
+	seq  uint32
+	data []byte
+}
+
+// retxSeg は再送キューの 1 エントリ。再送に必要な最小情報を持つ。
 type retxSeg struct {
 	seq     uint32
 	flags   Flags
+	payload []byte    // データセグメントの本体 (SYN/FIN 単独なら nil)
 	sentAt  time.Time // 先頭エントリの sentAt が RTO 起点
 	retries int       // 再送回数 (R2 上限判定用)
 }
 
-// seqLen はこのエントリが占める seq 数 (SYN/FIN は各 1)。ACK 除去判定に使う。
+// seqLen はこのエントリが占める seq 数 (payload 長 + SYN/FIN 各 1)。ACK 除去判定に使う。
 func (s retxSeg) seqLen() uint32 {
-	var n uint32
+	n := uint32(len(s.payload))
 	if s.flags.Has(FlagSYN) {
 		n++
 	}
@@ -142,6 +162,11 @@ func (s retxSeg) seqLen() uint32 {
 	}
 	return n
 }
+
+// defaultMSS は 1 セグメントに載せるデータの上限。TUN の MTU 1500 から
+// IPv4(20)+TCP(20) ヘッダを引いた 1460 より控えめにし、断片化しない値にする。
+// ponytail: MSS option による相手との折衝は未実装。固定値で足りる。折衝が要るならここを seam に。
+const defaultMSS = 1360
 
 // msl は Maximum Segment Lifetime (RFC 9293 §3.4.2 の推奨値 2 分)。
 const msl = 2 * time.Minute
