@@ -1,6 +1,43 @@
 package tcp
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
+
+// Serve は conn の受信ループを起動し、再送・TIME-WAIT 満了を駆動する Tick を
+// 定期的に回す。返す stop を呼ぶと両方を停止し link を閉じて goroutine を回収する。
+// receiver は非公開なので、アプリ層 (cmd) はこの薄い公開配線で接続を駆動する。
+func Serve(conn *Conn, maxPacket int) (stop func()) {
+	r := newReceiver(conn, conn.link, maxPacket)
+	r.Start()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-ticker.C:
+				conn.Tick()
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			ticker.Stop()
+			close(done)
+			wg.Wait()
+			r.Stop()
+		})
+	}
+}
 
 // receiver は Conn の受信ループを 1 本の goroutine で駆動する。
 //

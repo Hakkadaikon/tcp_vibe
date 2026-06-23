@@ -36,7 +36,7 @@ func newTestReceiver(t *testing.T) (*Conn, Link, *receiver) {
 	t.Helper()
 	a, b := NewPipeLink() // a が Conn 側、b がテストから書き込む側
 	fc := newFakeClock()
-	c := NewConn(a, fc.Now)
+	c := NewConn(a, fc.Now, Endpoint{IP: rlDst}, Endpoint{IP: rlSrc})
 	c.tcb.snd.iss = 7000
 	c.PassiveOpen()
 
@@ -143,7 +143,7 @@ func TestReceiveLoopDropsInvalidPackets(t *testing.T) {
 func TestReceiveLoopStopsWhenLinkClosed(t *testing.T) {
 	a, _ := NewPipeLink()
 	fc := newFakeClock()
-	c := NewConn(a, fc.Now)
+	c := NewConn(a, fc.Now, Endpoint{IP: rlDst}, Endpoint{IP: rlSrc})
 	c.PassiveOpen()
 
 	r := newReceiver(c, a, 65535)

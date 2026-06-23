@@ -5,21 +5,38 @@ import "sync"
 // maxWindow は window scale 無しの送信窓上限 (RFC 5961 MAX.SND.WND 既定値)。
 const maxWindow uint16 = 65535
 
+// defaultRcvWindow は接続開始時に広告する既定の受信窓。0 だとデータ/FIN
+// (SEG.LEN>0) が受理性テスト (RFC 9293 §3.10.7.4) で弾かれて通信できないため、
+// window scale 無しの最大値を広告する。
+const defaultRcvWindow uint16 = maxWindow
+
+// Endpoint は接続端点 (IPv4 アドレスとポート)。送出する IP/TCP ヘッダの
+// 送信元・宛先と、TCP チェックサムの擬似ヘッダに使う。
+type Endpoint struct {
+	IP   [4]byte
+	Port uint16
+}
+
 // Conn は 1 つの TCP 接続。状態 (TCB) を 1 つの mutex で守り、送信も同じ
 // クリティカルセクションで直列化する。受信は onSegment を呼ぶ側 (将来の受信
 // ループ goroutine) が 1 本に絞る前提。状態アクセスは必ず mutex 越し。
 type Conn struct {
-	link  Link
-	mu    sync.Mutex
-	tcb   TCB
-	ports struct {
+	link   Link
+	local  Endpoint
+	remote Endpoint
+	mu     sync.Mutex
+	tcb    TCB
+	ports  struct {
 		src, dst uint16
 	}
 }
 
 // NewConn は CLOSED 状態の接続を作る。clock は時刻 seam (再送・TIME-WAIT の決定論検証用)。
-func NewConn(link Link, clock Clock) *Conn {
-	c := &Conn{link: link}
+// local/remote は送出パケットの IP/TCP ヘッダと TCP チェックサム擬似ヘッダに使う。
+func NewConn(link Link, clock Clock, local, remote Endpoint) *Conn {
+	c := &Conn{link: link, local: local, remote: remote}
+	c.ports.src = local.Port
+	c.ports.dst = remote.Port
 	c.tcb.state = Closed
 	c.tcb.clock = clock
 	c.tcb.maxSndWnd = maxWindow
@@ -72,6 +89,7 @@ func (c *Conn) ActiveOpen(iss uint32) {
 	c.tcb.snd.iss = iss
 	c.tcb.snd.una = iss
 	c.tcb.snd.nxt = iss + 1
+	c.tcb.rcv.wnd = defaultRcvWindow
 	c.tcb.state = SynSent
 	c.send(Flags(FlagSYN), iss, 0)
 }
@@ -80,6 +98,7 @@ func (c *Conn) ActiveOpen(iss uint32) {
 func (c *Conn) PassiveOpen() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.tcb.rcv.wnd = defaultRcvWindow
 	c.tcb.state = Listen
 }
 
@@ -186,7 +205,9 @@ func (c *Conn) send(flags Flags, seq, ack uint32) {
 	c.tcb.retxQueue = append(c.tcb.retxQueue, seg)
 }
 
-// writeSeg はヘッダを組んで 1 セグメントをリンクへ書く (キュー操作なし)。
+// writeSeg はヘッダを組んで 1 セグメントを完全な IPv4 パケットとしてリンクへ書く
+// (キュー操作なし)。TCP チェックサムを擬似ヘッダ込みで埋めてから IPv4 ヘッダで包む。
+// これにより送出が受信ループ (IPv4 を剥がし TCP チェックサムを検証する) の前提と一致する。
 func (c *Conn) writeSeg(flags Flags, seq, ack uint32) {
 	h := TCPHeader{
 		SrcPort:    c.ports.src,
@@ -197,7 +218,16 @@ func (c *Conn) writeSeg(flags Flags, seq, ack uint32) {
 		Flags:      flags,
 		Window:     c.tcb.rcv.wnd,
 	}
-	_ = c.link.WritePacket(h.Marshal())
+	seg := h.Marshal()
+	putBe16(seg, 16, TCPChecksum(c.local.IP, c.remote.IP, seg))
+	ip := IPv4Header{
+		Protocol:    6, // TCP
+		TotalLength: uint16(ipv4MinHeader + len(seg)),
+		TTL:         64,
+		SrcAddr:     c.local.IP,
+		DstAddr:     c.remote.IP,
+	}
+	_ = c.link.WritePacket(append(ip.Marshal(), seg...))
 }
 
 // sendChallengeAck は RFC 5961 の challenge ACK を送る。3 攻撃 (blind RST/SYN/

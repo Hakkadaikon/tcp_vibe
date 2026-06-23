@@ -24,19 +24,38 @@ func drainPeer(t *testing.T, peer Link) (TCPHeader, bool) {
 	if err != nil {
 		return TCPHeader{}, false
 	}
-	h, err := ParseTCPHeader(pkt)
+	h, err := parseSentSegment(t, pkt)
 	if err != nil {
 		t.Fatalf("送信セグメントの解析に失敗: %v", err)
 	}
 	return h, true
 }
 
+// parseSentSegment は Conn が送出した完全な IPv4 パケットから IP ヘッダを剥がし、
+// TCP ヘッダを返す。送出は writeSeg で IPv4+TCP の生バイト列になるため、観測側は
+// まず IP を剥がす。
+func parseSentSegment(t *testing.T, pkt []byte) (TCPHeader, error) {
+	t.Helper()
+	ip, err := ParseIPv4Header(pkt)
+	if err != nil {
+		return TCPHeader{}, err
+	}
+	return ParseTCPHeader(pkt[int(ip.IHL)*4:])
+}
+
+// testLocal/testRemote は状態機械テスト用のダミー端点。送出パケットの IP/ポートと
+// チェックサム擬似ヘッダに使われるだけで、挙動 (フラグ/seq/ack) の検証には影響しない。
+var (
+	testLocal  = Endpoint{IP: [4]byte{10, 0, 0, 1}, Port: 12345}
+	testRemote = Endpoint{IP: [4]byte{10, 0, 0, 2}, Port: 80}
+)
+
 // newTestConn は Conn と、Conn の送信を観測する対向リンクを返す。
 func newTestConn(t *testing.T) (*Conn, Link, *fakeClock) {
 	t.Helper()
 	a, b := NewPipeLink()
 	fc := newFakeClock()
-	c := NewConn(a, fc.Now)
+	c := NewConn(a, fc.Now, testLocal, testRemote)
 	return c, b, fc
 }
 
@@ -344,6 +363,10 @@ func drainPeerNonblock(peer Link) (TCPHeader, bool) {
 	if err != nil {
 		return TCPHeader{}, false
 	}
-	h, _ := ParseTCPHeader(pkt)
+	ip, err := ParseIPv4Header(pkt)
+	if err != nil {
+		return TCPHeader{}, false
+	}
+	h, _ := ParseTCPHeader(pkt[int(ip.IHL)*4:])
 	return h, true
 }
