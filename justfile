@@ -32,13 +32,13 @@ test-flaky:
 vet:
     go vet ./...
 
-# 整形
+# 整形 (.aqua 等のツール配下を避け、モジュール内パッケージのみ)
 fmt:
-    gofmt -w .
+    gofmt -w tcp
 
 # 整形チェック (CI 用, 差分があれば失敗)
 fmt-check:
-    test -z "$(gofmt -l .)"
+    test -z "$(gofmt -l tcp)"
 
 # property-based テストだけ多めに回す
 test-pbt:
