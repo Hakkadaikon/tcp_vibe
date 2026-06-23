@@ -20,6 +20,11 @@ setup:
 build:
     go build ./...
 
+# 実機デモのバイナリを作る (sudo で実行するため独立したファイルに出力)
+demo-build:
+    go build -o bin/tcpdemo ./cmd/tcpdemo
+    @echo "built bin/tcpdemo (run with sudo on a host that has /dev/net/tun)"
+
 # 全テスト (race 検出付き)
 test:
     go test -race ./...
