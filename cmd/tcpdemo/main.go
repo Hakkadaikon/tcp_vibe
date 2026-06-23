@@ -1,8 +1,9 @@
-// tcpdemo は自作 TCP スタックを TUN デバイス越しに動かすデモ。
-// server (passive open) / client (active open) の 2 モードで握手し、
-// ESTABLISHED に達したら close するまでを実演する。
+// tcpdemo は自作 TCP スタックを TUN デバイス越し (--link=tun) または UDP トンネル
+// 越し (--link=udp、特権不要) で動かすデモ。server (passive open) / client
+// (active open) の 2 モードで握手し、ESTABLISHED に達したら close するまでを実演する。
 //
-// 実行には root と TUN デバイスが要る。手順は README を参照。
+// --link=tun は root と TUN デバイスが要る。--link=udp は root も TUN も要らず、
+// localhost の 2 ポートで 2 プロセスを起動するだけで動く。手順は README を参照。
 package main
 
 import (
@@ -18,7 +19,11 @@ import (
 
 func main() {
 	mode := flag.String("mode", "client", "client (active open) または server (passive open)")
-	ifName := flag.String("tun", "tun0", "TUN デバイス名")
+	linkKind := flag.String("link", "tun", "リンク種別: tun (要 root/TUN) または udp (特権不要の UDP トンネル)")
+	ifName := flag.String("tun", "tun0", "TUN デバイス名 (--link=tun)")
+	udpLocalPort := flag.Uint("udp-local-port", 40000, "UDP トンネルのローカルポート (--link=udp)")
+	udpRemotePort := flag.Uint("udp-remote-port", 40001, "UDP トンネルの相手ポート (--link=udp)")
+	udpRemoteHost := flag.String("udp-remote-host", "127.0.0.1", "UDP トンネルの相手ホスト (--link=udp)")
 	localIP := flag.String("local-ip", "10.0.0.1", "自分の IPv4 アドレス")
 	localPort := flag.Uint("local-port", 9000, "自分のポート")
 	remoteIP := flag.String("remote-ip", "10.0.0.2", "相手の IPv4 アドレス")
@@ -34,9 +39,22 @@ func main() {
 	local := tcp.Endpoint{IP: parseIP(*localIP), Port: uint16(*localPort)}
 	remote := tcp.Endpoint{IP: parseIP(*remoteIP), Port: uint16(*remotePort)}
 
-	link, err := tcp.NewTUNLink(*ifName)
-	if err != nil {
-		log.Fatalf("TUN デバイス %q を開けない (root か? デバイスはあるか?): %v", *ifName, err)
+	var link tcp.Link
+	var err error
+	switch *linkKind {
+	case "tun":
+		link, err = tcp.NewTUNLink(*ifName)
+		if err != nil {
+			log.Fatalf("TUN デバイス %q を開けない (root か? デバイスはあるか?): %v", *ifName, err)
+		}
+	case "udp":
+		link, err = tcp.NewUDPLink(uint16(*udpLocalPort), parseIP(*udpRemoteHost), uint16(*udpRemotePort))
+		if err != nil {
+			log.Fatalf("UDP トンネルを開けない (local=:%d remote=%s:%d): %v", *udpLocalPort, *udpRemoteHost, *udpRemotePort, err)
+		}
+		log.Printf("UDP トンネル: local=:%d remote=%s:%d (特権不要)", *udpLocalPort, *udpRemoteHost, *udpRemotePort)
+	default:
+		log.Fatalf("不明な --link: %q (tun か udp)", *linkKind)
 	}
 
 	conn := tcp.NewConn(link, time.Now, local, remote)
