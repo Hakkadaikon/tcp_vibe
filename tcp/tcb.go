@@ -105,6 +105,9 @@ type TCB struct {
 
 	// timeWaitDeadline は 2MSL タイマの満了時刻。TIME-WAIT 滞在中のみ有効。
 	timeWaitDeadline time.Time
+	// timeWaitDuration は TIME-WAIT の linger 時間 (= 2*MSL)。接続ごとに設定可能
+	// にし、デモで短い MSL を注入できるようにする。既定は 2*msl で RFC 通り。
+	timeWaitDuration time.Duration
 
 	// retxQueue は未 ACK セグメントの再送キュー。送信順 (seq 昇順) を保つ。
 	// 先頭が最古の未確認セグメントで、RTO はこの先頭基準で駆動する (RFC 9293 §3.8.1)。

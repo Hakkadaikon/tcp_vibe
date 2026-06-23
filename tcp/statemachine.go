@@ -1,6 +1,9 @@
 package tcp
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // maxWindow は window scale 無しの送信窓上限 (RFC 5961 MAX.SND.WND 既定値)。
 const maxWindow uint16 = 65535
@@ -40,6 +43,7 @@ func NewConn(link Link, clock Clock, local, remote Endpoint) *Conn {
 	c.tcb.state = Closed
 	c.tcb.clock = clock
 	c.tcb.maxSndWnd = maxWindow
+	c.tcb.timeWaitDuration = timeWaitDuration // 既定 2*MSL (RFC 通り)
 	return c
 }
 
@@ -86,6 +90,14 @@ func (c *Conn) RcvNxt() uint32 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.tcb.rcv.nxt
+}
+
+// SetMSL は MSL を設定し、TIME-WAIT の linger を 2*MSL に更新する。
+// 握手前 (CLOSED) に呼ぶ前提。デモで短い MSL を注入し TIME-WAIT を早く抜けるのに使う。
+func (c *Conn) SetMSL(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tcb.timeWaitDuration = 2 * d
 }
 
 // --- ユーザコール ---
@@ -556,5 +568,5 @@ func (c *Conn) enterTimeWait() {
 
 // restartTimeWait は 2MSL タイマを再起動する。
 func (c *Conn) restartTimeWait() {
-	c.tcb.timeWaitDeadline = c.tcb.clock().Add(timeWaitDuration)
+	c.tcb.timeWaitDeadline = c.tcb.clock().Add(c.tcb.timeWaitDuration)
 }

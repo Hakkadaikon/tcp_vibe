@@ -123,3 +123,11 @@ sudo で実行するため、独立したファイル `bin/tcpdemo` に出力し
 sudo ./bin/tcpdemo --mode=server --tun=tun0 --local-ip=10.0.0.1 --local-port=9000 --remote-ip=10.0.0.2 --remote-port=9001
 sudo ./bin/tcpdemo --mode=client --tun=tun1 --local-ip=10.0.0.2 --local-port=9001 --remote-ip=10.0.0.1 --remote-port=9000
 ```
+
+能動 close 側 (client) は FIN 交換後に TIME-WAIT へ入り、2MSL 待ってから CLOSED になります (RFC 9293 通り)。
+既定では MSL=2 分なので TIME-WAIT は 4 分続き、デモでは CLOSED まで待つと時間がかかります。
+最後まで見たいときは `--msl=2s` のように短い MSL を渡すと、TIME-WAIT が 2*MSL (この例で 4 秒) で抜けて CLOSED に到達します。
+
+```
+sudo ./bin/tcpdemo --mode=client --tun=tun1 --local-ip=10.0.0.2 --local-port=9001 --remote-ip=10.0.0.1 --remote-port=9000 --msl=2s
+```

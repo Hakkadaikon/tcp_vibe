@@ -23,6 +23,7 @@ func main() {
 	remoteIP := flag.String("remote-ip", "10.0.0.2", "相手の IPv4 アドレス")
 	remotePort := flag.Uint("remote-port", 9001, "相手のポート")
 	debug := flag.Bool("debug", false, "TCP スタックの診断ログを出す (受信/送信/TUN I/O)")
+	msl := flag.Duration("msl", 0, "MSL を上書き (例 2s)。TIME-WAIT は 2*MSL で抜ける。0 なら既定の 2 分 (TIME-WAIT 4 分)")
 	flag.Parse()
 
 	if *debug {
@@ -38,6 +39,10 @@ func main() {
 	}
 
 	conn := tcp.NewConn(link, time.Now, local, remote)
+	if *msl > 0 {
+		conn.SetMSL(*msl) // 握手前に注入。TIME-WAIT linger = 2*MSL
+		log.Printf("MSL=%v に設定 (TIME-WAIT は %v で抜ける)", *msl, 2*(*msl))
+	}
 	stop := tcp.Serve(conn, 65535)
 	defer stop()
 
@@ -64,7 +69,25 @@ func runClient(conn *tcp.Conn) {
 
 	log.Printf("close 開始: client から FIN を送る")
 	conn.Close()
-	waitClosed(conn)
+	waitClientClosed(conn)
+}
+
+// waitClientClosed は能動 close 側の終端を待つ。能動側は FIN 交換後に TIME-WAIT へ
+// 入り、2MSL 経過で CLOSED になる (RFC 9293 §3.10.4)。TIME-WAIT 到達は close 成功。
+// CLOSED まで待つが、2MSL 未経過で抜けられなくてもそれは正常な挙動。
+func waitClientClosed(conn *tcp.Conn) {
+	if !waitState(conn, tcp.TimeWait, 30*time.Second) {
+		log.Printf("TIME-WAIT に入らず終了: 現在 %v (握手到達=%v)", conn.State(), conn.ReachedEstablished())
+		return
+	}
+	log.Printf("close 成功 (TIME-WAIT)。2MSL 経過で CLOSED へ")
+
+	// 2MSL 経過を待つ。既定 (4 分) では長いので余裕を持たせる。--msl で短縮可。
+	if !waitState(conn, tcp.Closed, 5*time.Minute) {
+		log.Printf("TIME-WAIT のまま終了 (2MSL 未経過。これは正常。--msl を短くすると最後まで見られる)。握手到達=%v", conn.ReachedEstablished())
+		return
+	}
+	log.Printf("CLOSED 到達。正常終了 (握手到達=%v)", conn.ReachedEstablished())
 }
 
 // runServer は受動側のフロー。自分からは閉じず、相手の FIN で CLOSE-WAIT に

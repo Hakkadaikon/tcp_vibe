@@ -278,6 +278,28 @@ func TestTimeWaitExpiresAfter2MSL(t *testing.T) {
 	}
 }
 
+// SetMSL で短い MSL を入れると TIME-WAIT が 2*MSL で抜ける。
+func TestSetMSLShortensTimeWait(t *testing.T) {
+	c, _, fc := newTestConn(t)
+	c.SetMSL(2 * time.Second) // linger = 4 秒
+	c.tcb.state = TimeWait
+	c.restartTimeWait()
+
+	// 2*MSL 直前: まだ TIME-WAIT。
+	fc.advance(4*time.Second - time.Nanosecond)
+	c.Tick()
+	if c.State() != TimeWait {
+		t.Fatalf("2*MSL 満了前は TIME-WAIT 維持のはず: got %v", c.State())
+	}
+
+	// ちょうど 2*MSL: CLOSED へ。既定 4 分より遥かに早く抜ける。
+	fc.advance(time.Nanosecond)
+	c.Tick()
+	if c.State() != Closed {
+		t.Fatalf("短い MSL では 2*MSL 満了で CLOSED のはず: got %v", c.State())
+	}
+}
+
 // TIME-WAIT で RST → 2MSL を待たず即 CLOSED。
 func TestTimeWaitRstAbortsImmediately(t *testing.T) {
 	c, _, fc := newTestConn(t)
