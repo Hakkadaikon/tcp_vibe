@@ -101,22 +101,93 @@ func (c *Conn) Close() {
 
 // --- タイマ ---
 
-// Tick は時刻経過を駆動する。TIME-WAIT の 2MSL 満了で CLOSED へ落とす。
+// Tick は時刻経過を駆動する。TIME-WAIT の 2MSL 満了で CLOSED へ落とし、
+// 再送キューの RTO 満了で先頭を再送する。
 // 満了判定は clock seam の現在時刻と deadline の比較で決定論的に行う。
-// ponytail: 再送タイマはここに未実装。別タスクで RTO 駆動を足す。
 func (c *Conn) Tick() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.tcb.state == TimeWait && !c.tcb.clock().Before(c.tcb.timeWaitDeadline) {
 		c.tcb.state = Closed
 	}
+	c.checkRetransmit()
+}
+
+// checkRetransmit は再送キュー先頭の RTO 満了を判定し、満了なら再送する。
+// 送信回数が上限 (R2) を超えたら接続を閉じる (RFC 9293 §3.8.1, R-091/093)。
+func (c *Conn) checkRetransmit() {
+	if len(c.tcb.retxQueue) == 0 {
+		return
+	}
+	front := &c.tcb.retxQueue[0]
+	deadline := front.sentAt.Add(c.tcb.curRTO)
+	if c.tcb.clock().Before(deadline) {
+		return // RTO 未到達
+	}
+	if front.retries >= maxRetransmits {
+		// R2 到達: 再送し尽くした → 接続を閉じる (LIVE-3 の失敗決着、宙吊り回避)。
+		c.tcb.state = Closed
+		c.tcb.retxQueue = nil
+		c.tcb.curRTO = 0
+		return
+	}
+	// 先頭を再送し、回数・送信時刻を更新、RTO を倍化 (上限 maxRTO)。
+	c.writeSeg(front.flags, front.seq, c.tcb.rcv.nxt)
+	front.retries++
+	front.sentAt = c.tcb.clock()
+	if c.tcb.curRTO < maxRTO {
+		c.tcb.curRTO *= 2
+		if c.tcb.curRTO > maxRTO {
+			c.tcb.curRTO = maxRTO
+		}
+	}
+}
+
+// ackRetxQueue は acceptable ACK で完全確認された先頭エントリ群を除去する。
+// SEG.SEQ+SEG.LEN =< SEG.ACK を満たすぶんが確認済み (RFC 9293 §3.8.1, R-012)。
+// 除去後、残りがあれば RTO を初期値に戻して再起動、空ならタイマ停止。
+func (c *Conn) ackRetxQueue(ack uint32) {
+	removed := false
+	for len(c.tcb.retxQueue) > 0 {
+		s := c.tcb.retxQueue[0]
+		if !SeqLEQ(s.seq+s.seqLen(), ack) {
+			break
+		}
+		c.tcb.retxQueue = c.tcb.retxQueue[1:]
+		removed = true
+	}
+	if !removed {
+		return
+	}
+	if len(c.tcb.retxQueue) == 0 {
+		c.tcb.curRTO = 0 // 全確認 → タイマ停止
+		return
+	}
+	// 新しい先頭から測り直す (RTO 初期化 + 送信時刻起点を現在へ)。
+	c.tcb.curRTO = initialRTO
+	c.tcb.retxQueue[0].sentAt = c.tcb.clock()
 }
 
 // --- 送信ヘルパ ---
 
 // send は 1 セグメントを送る。ヘッダのみ (本タスクではペイロード送信は扱わない)。
-// 送信は mutex 保持中に呼ぶこと。
+// 送信は mutex 保持中に呼ぶこと。seq を消費するセグメント (SYN/FIN/データ) は
+// 再送キューに積み、RTO タイマを起動する (RFC 9293 §3.8.1)。
 func (c *Conn) send(flags Flags, seq, ack uint32) {
+	c.writeSeg(flags, seq, ack)
+	// seq を占めるセグメントだけ再送対象。ACK/RST 単独や challenge ACK は積まない。
+	seg := retxSeg{seq: seq, flags: flags, sentAt: c.tcb.clock()}
+	if seg.seqLen() == 0 {
+		return
+	}
+	if len(c.tcb.retxQueue) == 0 {
+		c.tcb.curRTO = initialRTO // キューが空からの追加でタイマ起動
+	}
+	c.tcb.retxQueue = append(c.tcb.retxQueue, seg)
+}
+
+// writeSeg はヘッダを組んで 1 セグメントをリンクへ書く (キュー操作なし)。
+func (c *Conn) writeSeg(flags Flags, seq, ack uint32) {
 	h := TCPHeader{
 		SrcPort:    c.ports.src,
 		DstPort:    c.ports.dst,
@@ -131,9 +202,28 @@ func (c *Conn) send(flags Flags, seq, ack uint32) {
 
 // sendChallengeAck は RFC 5961 の challenge ACK を送る。3 攻撃 (blind RST/SYN/
 // data injection) いずれも同一形式 <SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK>。
-// ponytail: throttling 未実装。timestamp+counter で 5 秒 10 個の上限を別タスクで足す。
+// RFC 5961 §7 のレート制限: 任意の challengeAckWindow 窓で challengeAckLimit 個まで。
+// timestamp+counter で実装しタイマは持たない。上限超は送出しない (抑制)。
 func (c *Conn) sendChallengeAck() {
+	if !c.allowChallengeAck() {
+		return
+	}
 	c.send(Flags(FlagACK), c.tcb.snd.nxt, c.tcb.rcv.nxt)
+}
+
+// allowChallengeAck はレート制限のトークン判定。窓が経過していればカウンタを
+// リセットし、窓内なら上限未満のときだけ true を返してカウントを進める。
+func (c *Conn) allowChallengeAck() bool {
+	now := c.tcb.clock()
+	if now.Sub(c.tcb.challengeWindowStart) > challengeAckWindow {
+		c.tcb.challengeWindowStart = now
+		c.tcb.challengeCount = 0
+	}
+	if c.tcb.challengeCount >= challengeAckLimit {
+		return false
+	}
+	c.tcb.challengeCount++
+	return true
 }
 
 // sendAck は素の ACK を返す (受理不可セグメントへの応答・FIN への ACK 等)。
@@ -269,6 +359,7 @@ func (c *Conn) onSegmentSynSent(h TCPHeader) {
 	if ackOK {
 		// SYN,ACK で自 SYN が確認された → ESTABLISHED (R-037)。
 		c.tcb.snd.una = h.AckNum
+		c.ackRetxQueue(h.AckNum) // 確認済み SYN を再送キューから除去 (R-012)
 		c.tcb.state = Established
 		c.sendAck()
 	} else {
@@ -362,6 +453,7 @@ func (c *Conn) handleAck(h TCPHeader) bool {
 	// acceptable ack (SND.UNA < SEG.ACK =< SND.NXT) でのみ UNA 前進 (INV-001/002)。
 	if AcceptableAck(c.tcb.snd.una, h.AckNum, c.tcb.snd.nxt) {
 		c.tcb.snd.una = h.AckNum
+		c.ackRetxQueue(h.AckNum) // 確認済みセグメントを再送キューから除去 (R-012)
 	}
 	c.advanceStateOnAck(h)
 	return true
