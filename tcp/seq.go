@@ -28,16 +28,6 @@ func SeqGT(a, b uint32) bool {
 	return SeqLT(b, a)
 }
 
-// SeqGEQ は a >= b。
-func SeqGEQ(a, b uint32) bool {
-	return a == b || SeqLT(b, a)
-}
-
-// SeqAdd は (a + b) mod 2^32。uint32 の自然なラップ。
-func SeqAdd(a, b uint32) uint32 {
-	return a + b
-}
-
 // AcceptableAck は SND.UNA < SEG.ACK =< SND.NXT を環状空間で判定する (RFC 9293 R-011)。
 func AcceptableAck(una, ack, nxt uint32) bool {
 	return SeqLT(una, ack) && SeqLEQ(ack, nxt)

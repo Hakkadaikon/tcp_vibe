@@ -27,8 +27,8 @@ func TestSeqLT_Boundaries(t *testing.T) {
 	}
 }
 
-// T-011: SEG_LEQ / GT / GEQ 境界
-func TestSeqLEQ_GT_GEQ(t *testing.T) {
+// T-011: SEG_LEQ / GT 境界
+func TestSeqLEQ_GT(t *testing.T) {
 	if !SeqLEQ(5, 5) {
 		t.Error("SeqLEQ(x,x) should be true")
 	}
@@ -40,9 +40,6 @@ func TestSeqLEQ_GT_GEQ(t *testing.T) {
 	}
 	if SeqGT(5, 5) {
 		t.Error("SeqGT(x,x) should be false")
-	}
-	if !SeqGEQ(5, 5) {
-		t.Error("SeqGEQ(x,x) should be true")
 	}
 }
 
@@ -152,23 +149,5 @@ func TestAcceptableAck_Wrap(t *testing.T) {
 	}
 	if AcceptableAck(una, 6, nxt) {
 		t.Error("wrap: ack=6 (>nxt) not acceptable")
-	}
-}
-
-// T-014: seq 加算のラップ
-func TestSeqAdd_Wrap(t *testing.T) {
-	const max uint32 = math.MaxUint32
-	if got := SeqAdd(max, 1); got != 0 {
-		t.Errorf("SeqAdd(max,1)=%d want 0", got)
-	}
-	if got := SeqAdd(max, 2); got != 1 {
-		t.Errorf("SeqAdd(max,2)=%d want 1", got)
-	}
-	// property: SeqAdd は panic せず常に (a+b) mod 2^32
-	f := func(a, b uint32) bool {
-		return SeqAdd(a, b) == uint32(uint64(a)+uint64(b))
-	}
-	if err := quick.Check(f, &quick.Config{MaxCount: 5000}); err != nil {
-		t.Error(err)
 	}
 }

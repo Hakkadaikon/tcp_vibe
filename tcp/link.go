@@ -21,12 +21,9 @@ type Link interface {
 // ErrLinkClosed は閉じたリンクへの操作で返る。
 var ErrLinkClosed = errors.New("tcp: link closed")
 
-// Clock は時刻取得の seam。既定は time.Now、テストは fake clock を注入する。
+// Clock は時刻取得の seam。本番は time.Now を渡し、テストは fake clock を注入する。
 // 再送・TIME-WAIT の境界を決定論的に検証するために分離する。
 type Clock func() time.Time
-
-// SystemClock は実時刻を返す既定の Clock。
-func SystemClock() time.Time { return time.Now() }
 
 // pipeLink はメモリ上でパケットを運ぶ Link。NewPipeLink で対になって生成され、
 // 一方の WritePacket が他方の ReadPacket に届く。
