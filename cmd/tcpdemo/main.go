@@ -15,8 +15,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/hakkadaikon/tcp_vibe/tcp"
+	"github.com/hakkadaikon/tcp_vibe/tcp/link"
 	"github.com/hakkadaikon/tcp_vibe/tcp/network"
+	"github.com/hakkadaikon/tcp_vibe/tcp/transport"
 )
 
 func main() {
@@ -44,25 +45,25 @@ func main() {
 		network.Debug = func(f string, a ...any) { log.Printf("[tcp] "+f, a...) }
 	}
 
-	local := tcp.Endpoint{IP: parseIP(*localIP), Port: uint16(*localPort)}
-	remote := tcp.Endpoint{IP: parseIP(*remoteIP), Port: uint16(*remotePort)}
+	local := transport.Endpoint{IP: parseIP(*localIP), Port: uint16(*localPort)}
+	remote := transport.Endpoint{IP: parseIP(*remoteIP), Port: uint16(*remotePort)}
 
-	var link tcp.Link
+	var lnk link.Link
 	var err error
 	switch *linkKind {
 	case "tun":
-		link, err = tcp.NewTUNLink(*ifName)
+		lnk, err = link.NewTUNLink(*ifName)
 		if err != nil {
 			log.Fatalf("TUN デバイス %q を開けない (root か? デバイスはあるか?): %v", *ifName, err)
 		}
 	case "udp":
-		link, err = tcp.NewUDPLink(uint16(*udpLocalPort), parseIP(*udpRemoteHost), uint16(*udpRemotePort))
+		lnk, err = link.NewUDPLink(uint16(*udpLocalPort), parseIP(*udpRemoteHost), uint16(*udpRemotePort))
 		if err != nil {
 			log.Fatalf("UDP トンネルを開けない (local=:%d remote=%s:%d): %v", *udpLocalPort, *udpRemoteHost, *udpRemotePort, err)
 		}
 		log.Printf("UDP トンネル: local=:%d remote=%s:%d (特権不要)", *udpLocalPort, *udpRemoteHost, *udpRemotePort)
 	case "unix":
-		link, err = tcp.NewUnixLink(*unixLocal, *unixRemote)
+		lnk, err = link.NewUnixLink(*unixLocal, *unixRemote)
 		if err != nil {
 			log.Fatalf("Unix socket を開けない (local=%s remote=%s): %v", *unixLocal, *unixRemote, err)
 		}
@@ -70,7 +71,7 @@ func main() {
 	case "holepunch":
 		rIP, rPort := parseHostPort(*rendezvous)
 		log.Printf("hole punch: ランデブー %s 経由で session=%q の相手と直接 UDP を確立 (特権不要)", *rendezvous, *session)
-		link, err = tcp.DialHolePunch(rIP, rPort, *session, uint16(*punchLocalPort), *punchTimeout)
+		lnk, err = link.DialHolePunch(rIP, rPort, *session, uint16(*punchLocalPort), *punchTimeout)
 		if err != nil {
 			log.Fatalf("hole punch 失敗 (相手不在/NAT が穴を開けられない可能性): %v", err)
 		}
@@ -79,12 +80,12 @@ func main() {
 		log.Fatalf("不明な --link: %q (tun / udp / unix)", *linkKind)
 	}
 
-	conn := tcp.NewConn(link, time.Now, local, remote)
+	conn := transport.NewConn(lnk, time.Now, local, remote)
 	if *msl > 0 {
 		conn.SetMSL(*msl) // 握手前に注入。TIME-WAIT linger = 2*MSL
 		log.Printf("MSL=%v に設定 (TIME-WAIT は %v で抜ける)", *msl, 2*(*msl))
 	}
-	stop := tcp.Serve(conn, 65535)
+	stop := transport.Serve(conn, 65535)
 	defer stop()
 
 	switch *mode {
@@ -102,7 +103,7 @@ func main() {
 }
 
 // runClient は能動側のフロー。握手成立後にメッセージを送り、graceful close を主導する。
-func runClient(conn *tcp.Conn) {
+func runClient(conn *transport.Conn) {
 	if !waitEstablished(conn, 30*time.Second) {
 		log.Fatalf("握手が成立しなかった: 現在 %v", conn.State())
 	}
@@ -126,15 +127,15 @@ func runClient(conn *tcp.Conn) {
 // waitClientClosed は能動 close 側の終端を待つ。能動側は FIN 交換後に TIME-WAIT へ
 // 入り、2MSL 経過で CLOSED になる (RFC 9293 §3.10.4)。TIME-WAIT 到達は close 成功。
 // CLOSED まで待つが、2MSL 未経過で抜けられなくてもそれは正常な挙動。
-func waitClientClosed(conn *tcp.Conn) {
-	if !waitState(conn, tcp.TimeWait, 30*time.Second) {
+func waitClientClosed(conn *transport.Conn) {
+	if !waitState(conn, transport.TimeWait, 30*time.Second) {
 		// 能動 close で TIME-WAIT にすら入れないのは close 失敗。非 0 で抜ける。
 		log.Fatalf("TIME-WAIT に入らず終了: 現在 %v (握手到達=%v)", conn.State(), conn.ReachedEstablished())
 	}
 	log.Printf("close 成功 (TIME-WAIT)。2MSL 経過で CLOSED へ")
 
 	// 2MSL 経過を待つ。既定 (4 分) では長いので余裕を持たせる。--msl で短縮可。
-	if !waitState(conn, tcp.Closed, 5*time.Minute) {
+	if !waitState(conn, transport.Closed, 5*time.Minute) {
 		log.Printf("TIME-WAIT のまま終了 (2MSL 未経過。これは正常。--msl を短くすると最後まで見られる)。握手到達=%v", conn.ReachedEstablished())
 		return
 	}
@@ -143,7 +144,7 @@ func waitClientClosed(conn *tcp.Conn) {
 
 // runServer は受動側のフロー。自分からは閉じず、相手の FIN で CLOSE-WAIT に
 // なったら自分も Close して LAST-ACK → CLOSED まで進める。
-func runServer(conn *tcp.Conn) {
+func runServer(conn *transport.Conn) {
 	if !waitEstablished(conn, 30*time.Second) {
 		log.Fatalf("握手が成立しなかった: 現在 %v", conn.State())
 	}
@@ -153,7 +154,7 @@ func runServer(conn *tcp.Conn) {
 	var received []byte
 	buf := make([]byte, 4096)
 	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) && conn.State() != tcp.CloseWait {
+	for time.Now().Before(deadline) && conn.State() != transport.CloseWait {
 		n, err := conn.Recv(buf)
 		if n > 0 {
 			received = append(received, buf[:n]...)
@@ -171,7 +172,7 @@ func runServer(conn *tcp.Conn) {
 		// データ転送のデモなのに 1 バイトも受け取れていないのは失敗。
 		log.Fatalf("データを 1 バイトも受信できなかった: 現在 %v", conn.State())
 	}
-	if conn.State() != tcp.CloseWait {
+	if conn.State() != transport.CloseWait {
 		// 相手の FIN を受け取れず CLOSE-WAIT に至らないのは通信失敗。非 0 で抜ける。
 		log.Fatalf("相手の close を待たずタイムアウト: 現在 %v", conn.State())
 	}
@@ -181,8 +182,8 @@ func runServer(conn *tcp.Conn) {
 }
 
 // waitClosed は CLOSED 到達まで待ち、節目をログに出す。
-func waitClosed(conn *tcp.Conn) {
-	if !waitState(conn, tcp.Closed, 30*time.Second) {
+func waitClosed(conn *transport.Conn) {
+	if !waitState(conn, transport.Closed, 30*time.Second) {
 		// 受動 close 側は 2MSL 待ちが無く CLOSED まで進むはず。未到達は失敗。
 		log.Fatalf("CLOSED まで到達せず終了: 現在 %v", conn.State())
 	}
@@ -191,7 +192,7 @@ func waitClosed(conn *tcp.Conn) {
 
 // waitEstablished は握手成立を待つ。現在値ではなく「ESTABLISHED に到達したか」で
 // 判定するため、ESTABLISHED→CLOSE-WAIT が速くても取りこぼさない。
-func waitEstablished(conn *tcp.Conn, timeout time.Duration) bool {
+func waitEstablished(conn *transport.Conn, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	nextReport := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
@@ -209,7 +210,7 @@ func waitEstablished(conn *tcp.Conn, timeout time.Duration) bool {
 
 // waitState は conn が want になるまで timeout まで待つ。到達したら true。
 // 終端状態 (CLOSE-WAIT/CLOSED) の検知に使う。1 秒ごとに現在状態をログに出す。
-func waitState(conn *tcp.Conn, want tcp.State, timeout time.Duration) bool {
+func waitState(conn *transport.Conn, want transport.State, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	nextReport := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
