@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import "errors"
 
 // TCP オプションの parse / marshal (RFC 9293 §3.1, RFC 7323, RFC 2018)。
@@ -68,7 +70,7 @@ func ParseTCPOptions(b []byte) (TCPOptions, error) {
 				return TCPOptions{}, errBadOption
 			}
 			o.HasMSS = true
-			o.MSS = be16(val, 0)
+			o.MSS = network.Be16(val, 0)
 		case optWScale:
 			if length != 3 {
 				return TCPOptions{}, errBadOption
@@ -88,15 +90,15 @@ func ParseTCPOptions(b []byte) (TCPOptions, error) {
 			for k := 0; k < n; k++ {
 				off := k * 8
 				o.SACKBlocks = append(o.SACKBlocks,
-					[2]uint32{be32(val, off), be32(val, off+4)})
+					[2]uint32{network.Be32(val, off), network.Be32(val, off+4)})
 			}
 		case optTimestamp:
 			if length != 10 {
 				return TCPOptions{}, errBadOption
 			}
 			o.HasTimestamp = true
-			o.TSVal = be32(val, 0)
-			o.TSecr = be32(val, 4)
+			o.TSVal = network.Be32(val, 0)
+			o.TSecr = network.Be32(val, 4)
 		default:
 			// 未知 option: length 分読み飛ばして無視 (エラーにしない)。
 		}

@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import "testing"
 
 // sackOpts は peer に届いた次セグメントの SACK ブロックを返す。
@@ -9,7 +11,7 @@ func sackOpts(t *testing.T, peer Link) (TCPOptions, bool) {
 	if err != nil {
 		return TCPOptions{}, false
 	}
-	ip, err := ParseIPv4Header(pkt)
+	ip, err := network.ParseIPv4Header(pkt)
 	if err != nil {
 		t.Fatalf("IP 解析失敗: %v", err)
 	}

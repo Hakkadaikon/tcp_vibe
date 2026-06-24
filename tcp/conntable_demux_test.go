@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"testing"
 	"time"
@@ -13,8 +15,8 @@ var (
 // buildSeg は src→dst の IPv4+TCP パケットを組む (チェックサム整合)。
 func buildSeg(src, dst [4]byte, h TCPHeader, payload []byte) []byte {
 	tcp := append(h.Marshal(), payload...)
-	putBe16(tcp, 16, TCPChecksum(src, dst, tcp))
-	ip := IPv4Header{Protocol: 6, TotalLength: uint16(20 + len(tcp)), SrcAddr: src, DstAddr: dst, TTL: 64}
+	network.PutBe16(tcp, 16, network.TCPChecksum(src, dst, tcp))
+	ip := network.IPv4Header{Protocol: 6, TotalLength: uint16(20 + len(tcp)), SrcAddr: src, DstAddr: dst, TTL: 64}
 	return append(ip.Marshal(), tcp...)
 }
 
@@ -32,7 +34,7 @@ func readSegWithin(t *testing.T, peer Link, d time.Duration) *TCPHeader {
 			ch <- res{}
 			return
 		}
-		ip, _ := ParseIPv4Header(pkt)
+		ip, _ := network.ParseIPv4Header(pkt)
 		h, _ := ParseTCPHeader(pkt[int(ip.IHL)*4:])
 		ch <- res{h, true}
 	}()

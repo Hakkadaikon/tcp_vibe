@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"runtime"
 	"sync"
@@ -17,10 +19,10 @@ var (
 func buildSegment(h TCPHeader, payload []byte) []byte {
 	tcp := append(h.Marshal(), payload...)
 	// TCP チェックサムは擬似ヘッダ込みで計算し直して埋める。
-	putBe16(tcp, 16, TCPChecksum(rlSrc, rlDst, tcp))
+	network.PutBe16(tcp, 16, network.TCPChecksum(rlSrc, rlDst, tcp))
 
 	total := 20 + len(tcp)
-	ip := IPv4Header{
+	ip := network.IPv4Header{
 		Protocol:    6,
 		TotalLength: uint16(total),
 		SrcAddr:     rlSrc,
@@ -87,7 +89,7 @@ func TestReceiveLoopProcessesEachPacketSeparately(t *testing.T) {
 func TestReceiveLoopSurvivesNonIPv4Packet(t *testing.T) {
 	c, peer, _ := newTestReceiver(t)
 
-	// version=6 (IPv6) の先頭バイトを持つパケット。ParseIPv4Header は非 IPv4 として拒否。
+	// version=6 (IPv6) の先頭バイトを持つパケット。network.ParseIPv4Header は非 IPv4 として拒否。
 	ipv6ish := make([]byte, 48)
 	ipv6ish[0] = 0x60 // 上位 4bit = version = 6
 	if err := peer.WritePacket(ipv6ish); err != nil {
@@ -108,7 +110,7 @@ func TestReceiveLoopSurvivesNonIPv4Packet(t *testing.T) {
 func TestReceiveLoopDropsInvalidPackets(t *testing.T) {
 	c, peer, _ := newTestReceiver(t)
 
-	// (1) IPv4 チェックサムを壊したパケット。ParseIPv4Header が拒否し破棄される。
+	// (1) IPv4 チェックサムを壊したパケット。network.ParseIPv4Header が拒否し破棄される。
 	badIP := buildSegment(TCPHeader{Flags: Flags(FlagSYN), SeqNum: 1111, DataOffset: 5}, nil)
 	badIP[10] ^= 0xFF // IPv4 ヘッダチェックサム域を破壊
 	if err := peer.WritePacket(badIP); err != nil {
@@ -116,7 +118,7 @@ func TestReceiveLoopDropsInvalidPackets(t *testing.T) {
 	}
 
 	// (2) TCP でないパケット (Protocol=17 UDP)。dispatch が proto!=6 で破棄。
-	udp := IPv4Header{Protocol: 17, TotalLength: 40, SrcAddr: rlSrc, DstAddr: rlDst, TTL: 64}
+	udp := network.IPv4Header{Protocol: 17, TotalLength: 40, SrcAddr: rlSrc, DstAddr: rlDst, TTL: 64}
 	udpPkt := append(udp.Marshal(), make([]byte, 20)...) // 中身は何でもよい (届かない)
 	if err := peer.WritePacket(udpPkt); err != nil {
 		t.Fatalf("WritePacket(udp) 失敗: %v", err)
@@ -130,7 +132,7 @@ func TestReceiveLoopDropsInvalidPackets(t *testing.T) {
 	}
 
 	// (3) IPv4 としては正しいが TCP ヘッダが短すぎるパケット。ParseTCPHeader が拒否。
-	shortIP := IPv4Header{Protocol: 6, TotalLength: 24, SrcAddr: rlSrc, DstAddr: rlDst, TTL: 64}
+	shortIP := network.IPv4Header{Protocol: 6, TotalLength: 24, SrcAddr: rlSrc, DstAddr: rlDst, TTL: 64}
 	shortPkt := append(shortIP.Marshal(), 0, 0, 0, 0) // TCP 部 4 バイトだけ (20 未満)
 	if err := peer.WritePacket(shortPkt); err != nil {
 		t.Fatalf("WritePacket(short) 失敗: %v", err)

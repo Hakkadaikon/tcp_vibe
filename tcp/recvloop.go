@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"sync"
 	"time"
@@ -100,7 +102,7 @@ func (r *receiver) loop() {
 	for {
 		pkt, err := r.link.ReadPacket()
 		if err != nil {
-			debugf("recv: ReadPacket エラー: %v", err)
+			network.Debugf("recv: ReadPacket エラー: %v", err)
 			return // ErrLinkClosed 等。link が閉じたらループ終了。
 		}
 		r.dispatch(pkt)
@@ -111,32 +113,32 @@ func (r *receiver) loop() {
 // 解析失敗 (チェックサム不一致・短すぎ・TCP でない) は接続を壊さずそのパケットを
 // 捨てて継続する (不正パケットは状態機械に届かない)。
 func (r *receiver) dispatch(pkt []byte) {
-	ip, err := ParseIPv4Header(pkt)
+	ip, err := network.ParseIPv4Header(pkt)
 	if err != nil {
-		debugf("recv: 破棄 (IPv4 パース失敗): len=%d err=%v", len(pkt), err)
+		network.Debugf("recv: 破棄 (IPv4 パース失敗): len=%d err=%v", len(pkt), err)
 		return // 不正な IPv4 ヘッダ (チェックサム不一致等) は破棄。
 	}
-	debugf("recv: パケット len=%d %s -> %s proto=%d", len(pkt), ipStr(ip.SrcAddr), ipStr(ip.DstAddr), ip.Protocol)
+	network.Debugf("recv: パケット len=%d %s -> %s proto=%d", len(pkt), network.IPStr(ip.SrcAddr), network.IPStr(ip.DstAddr), ip.Protocol)
 	if ip.Protocol != 6 { // 6 = TCP
-		debugf("recv: 破棄 (非TCP proto=%d)", ip.Protocol)
+		network.Debugf("recv: 破棄 (非TCP proto=%d)", ip.Protocol)
 		return
 	}
-	segment, ok := tcpSegment(ip, pkt)
+	segment, ok := network.TCPSegment(ip, pkt)
 	if !ok {
-		debugf("recv: 破棄 (IPv4 TotalLength 不正): len=%d total=%d", len(pkt), ip.TotalLength)
+		network.Debugf("recv: 破棄 (IPv4 TotalLength 不正): len=%d total=%d", len(pkt), ip.TotalLength)
 		return // TotalLength がバッファと矛盾するパケットは破棄。
 	}
 	// TCP チェックサム検証 (擬似ヘッダ込み)。不一致なら状態機械に届けない。
 	// 正しいセグメントは checksum 欄込みの ones'-comp sum が 0 になる。
-	if sum := TCPChecksum(ip.SrcAddr, ip.DstAddr, segment); sum != 0 {
-		debugf("recv: 破棄 (TCP チェックサム不一致 計算値=0x%04x)", sum)
+	if sum := network.TCPChecksum(ip.SrcAddr, ip.DstAddr, segment); sum != 0 {
+		network.Debugf("recv: 破棄 (TCP チェックサム不一致 計算値=0x%04x)", sum)
 		return
 	}
 	h, err := ParseTCPHeader(segment)
 	if err != nil {
-		debugf("recv: 破棄 (TCP ヘッダパース失敗): err=%v", err)
+		network.Debugf("recv: 破棄 (TCP ヘッダパース失敗): err=%v", err)
 		return // 不正な TCP ヘッダは破棄。
 	}
-	debugf("recv: onSegment flags=%s seq=%d ack=%d", flagsStr(h.Flags), h.SeqNum, h.AckNum)
+	network.Debugf("recv: onSegment flags=%s seq=%d ack=%d", flagsStr(h.Flags), h.SeqNum, h.AckNum)
 	r.conn.onSegment(h, segment[int(h.DataOffset)*4:])
 }

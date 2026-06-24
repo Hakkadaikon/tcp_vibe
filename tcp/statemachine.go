@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"sync"
 	"time"
@@ -409,15 +411,15 @@ func (c *Conn) writeSegOpts(flags Flags, seq, ack uint32, payload, opts []byte) 
 		Options:    opts,
 	}
 	seg := append(h.Marshal(), payload...)
-	putBe16(seg, 16, TCPChecksum(c.local.IP, c.remote.IP, seg))
-	ip := IPv4Header{
+	network.PutBe16(seg, 16, network.TCPChecksum(c.local.IP, c.remote.IP, seg))
+	ip := network.IPv4Header{
 		Protocol:    6, // TCP
 		TotalLength: uint16(ipv4MinHeader + len(seg)),
 		TTL:         64,
 		SrcAddr:     c.local.IP,
 		DstAddr:     c.remote.IP,
 	}
-	debugf("send: flags=%s seq=%d ack=%d dst=%s:%d", flagsStr(flags), seq, ack, ipStr(c.remote.IP), c.ports.dst)
+	network.Debugf("send: flags=%s seq=%d ack=%d dst=%s:%d", flagsStr(flags), seq, ack, network.IPStr(c.remote.IP), c.ports.dst)
 	_ = c.link.WritePacket(append(ip.Marshal(), seg...))
 }
 

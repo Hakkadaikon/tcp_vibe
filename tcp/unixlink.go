@@ -2,6 +2,8 @@
 
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"errors"
 	"sync"
@@ -50,7 +52,7 @@ func NewUnixLink(localPath string, remotePath string) (Link, error) {
 		remote:    syscall.SockaddrUnix{Name: remotePath},
 		localPath: localPath,
 	}
-	debugf("unix: open local=%s remote=%s", localPath, remotePath)
+	network.Debugf("unix: open local=%s remote=%s", localPath, remotePath)
 	return l, nil
 }
 
@@ -80,7 +82,7 @@ func (l *unixLink) WritePacket(pkt []byte) error {
 	} else {
 		err = syscall.Sendto(l.fd, pkt, 0, &l.remote)
 	}
-	debugf("unix: write n=%d err=%v", len(pkt), err)
+	network.Debugf("unix: write n=%d err=%v", len(pkt), err)
 	if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
 		// 相手の bind 待ち。再送で回収されるので握手を止めない。
 		return nil
@@ -109,7 +111,7 @@ func (l *unixLink) ReadPacket() ([]byte, error) {
 			if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EINVAL) {
 				return nil, ErrLinkClosed
 			}
-			debugf("unix: read err=%v", err)
+			network.Debugf("unix: read err=%v", err)
 			return nil, err
 		}
 		// Recvfrom 中に Close されると shutdown が 0 バイトで起こすことがある。
@@ -120,7 +122,7 @@ func (l *unixLink) ReadPacket() ([]byte, error) {
 		if closed {
 			return nil, ErrLinkClosed
 		}
-		debugf("unix: read n=%d", n)
+		network.Debugf("unix: read n=%d", n)
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
 		return pkt, nil

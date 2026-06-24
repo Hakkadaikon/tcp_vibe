@@ -1,4 +1,4 @@
-package tcp
+package network
 
 // インターネットチェックサム (RFC 1071 / RFC 9293 §3.1)。
 // 16bit ワードの ones' complement sum の ones' complement。
@@ -32,7 +32,7 @@ func TCPChecksum(srcIP, dstIP [4]byte, tcpSegment []byte) uint16 {
 	copy(buf[4:8], dstIP[:])
 	buf[8] = 0
 	buf[9] = protoTCP
-	putBe16(buf, 10, uint16(len(tcpSegment)))
+	PutBe16(buf, 10, uint16(len(tcpSegment)))
 	copy(buf[12:], tcpSegment)
 	return Checksum(buf)
 }

@@ -1,4 +1,4 @@
-package tcp
+package network
 
 import "errors"
 
@@ -26,15 +26,15 @@ func (h IPv4Header) Marshal() []byte {
 	b := make([]byte, 20)
 	b[0] = 4<<4 | 5 // version=4, IHL=5
 	// b[1] (DSCP/ECN) は 0。
-	putBe16(b, 2, h.TotalLength)
-	putBe16(b, 4, h.ID)
+	PutBe16(b, 2, h.TotalLength)
+	PutBe16(b, 4, h.ID)
 	// b[6:8] (flags/fragment offset) は 0。
 	b[8] = h.TTL
 	b[9] = h.Protocol
 	// b[10:12] チェックサムは一旦 0 のまま。
 	copy(b[12:16], h.SrcAddr[:])
 	copy(b[16:20], h.DstAddr[:])
-	putBe16(b, 10, Checksum(b))
+	PutBe16(b, 10, Checksum(b))
 	return b
 }
 
@@ -58,8 +58,8 @@ func ParseIPv4Header(b []byte) (IPv4Header, error) {
 	h := IPv4Header{
 		Version:     b[0] >> 4,
 		IHL:         ihl,
-		TotalLength: be16(b, 2),
-		ID:          be16(b, 4),
+		TotalLength: Be16(b, 2),
+		ID:          Be16(b, 4),
 		TTL:         b[8],
 		Protocol:    b[9],
 	}
@@ -68,11 +68,11 @@ func ParseIPv4Header(b []byte) (IPv4Header, error) {
 	return h, nil
 }
 
-// tcpSegment は IPv4 パケット pkt から TCP セグメント部 (IP ヘッダ後〜TotalLength)
+// TCPSegment は IPv4 パケット pkt から TCP セグメント部 (IP ヘッダ後〜TotalLength)
 // を切り出す。TotalLength で切り詰めることで、Link が渡す末尾パディングや連結バイトが
 // TCP セグメントへ混入するのを防ぐ (checksum 誤判定・過大ペイロードの回避)。
 // TotalLength が妥当でない (ヘッダ長未満 or 実バッファ超) なら ok=false。
-func tcpSegment(h IPv4Header, pkt []byte) ([]byte, bool) {
+func TCPSegment(h IPv4Header, pkt []byte) ([]byte, bool) {
 	hdrLen := int(h.IHL) * 4
 	total := int(h.TotalLength)
 	if total < hdrLen || total > len(pkt) {

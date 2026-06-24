@@ -2,6 +2,8 @@
 
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"errors"
 	"sync"
@@ -49,7 +51,7 @@ func NewUDPLink(localPort uint16, remoteIP [4]byte, remotePort uint16) (Link, er
 		fd:     fd,
 		remote: syscall.SockaddrInet4{Port: int(remotePort), Addr: remoteIP},
 	}
-	debugf("udp: open local=:%d remote=%s:%d", localPort, ipStr(remoteIP), remotePort)
+	network.Debugf("udp: open local=:%d remote=%s:%d", localPort, network.IPStr(remoteIP), remotePort)
 	return l, nil
 }
 
@@ -68,7 +70,7 @@ func NewUDPLinkPunch(localPort uint16) (*udpLink, error) {
 		syscall.Close(fd)
 		return nil, err
 	}
-	debugf("udp: open(punch) local=:%d remote=<未確定>", localPort)
+	network.Debugf("udp: open(punch) local=:%d remote=<未確定>", localPort)
 	return &udpLink{fd: fd, learn: true}, nil
 }
 
@@ -98,7 +100,7 @@ func (l *udpLink) WritePacket(pkt []byte) error {
 		return ErrPunchPeerUnknown
 	}
 	err := syscall.Sendto(l.fd, pkt, 0, &remote)
-	debugf("udp: write n=%d err=%v", len(pkt), err)
+	network.Debugf("udp: write n=%d err=%v", len(pkt), err)
 	return err
 }
 
@@ -123,7 +125,7 @@ func (l *udpLink) ReadPacket() ([]byte, error) {
 			if errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EINVAL) {
 				return nil, ErrLinkClosed
 			}
-			debugf("udp: read err=%v", err)
+			network.Debugf("udp: read err=%v", err)
 			return nil, err
 		}
 		// Recvfrom 中に Close されると shutdown が 0 バイトで起こすことがある。
@@ -140,7 +142,7 @@ func (l *udpLink) ReadPacket() ([]byte, error) {
 			if in4, ok := from.(*syscall.SockaddrInet4); ok {
 				l.remote = *in4
 				l.learn = false
-				debugf("udp: learn remote=%s:%d", ipStr(in4.Addr), in4.Port)
+				network.Debugf("udp: learn remote=%s:%d", network.IPStr(in4.Addr), in4.Port)
 			}
 		}
 		l.mu.Unlock()
@@ -148,10 +150,10 @@ func (l *udpLink) ReadPacket() ([]byte, error) {
 		// 渡さず捨てる。確立後に相手の punch 連射が遅れて届いても無視するため。
 		// IPv4 ヘッダは先頭が 0x4_ なので punch マーカ 'P' (0x50) と衝突しない。
 		if isPunchPacket(buf[:n]) {
-			debugf("udp: drop late punch packet n=%d", n)
+			network.Debugf("udp: drop late punch packet n=%d", n)
 			continue
 		}
-		debugf("udp: read n=%d", n)
+		network.Debugf("udp: read n=%d", n)
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
 		return pkt, nil

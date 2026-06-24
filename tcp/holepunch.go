@@ -2,6 +2,8 @@
 
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"bytes"
 	"errors"
@@ -61,7 +63,7 @@ func DialHolePunch(rendezvousIP [4]byte, rendezvousPort uint16, sessionID string
 		link.Close()
 		return nil, err
 	}
-	debugf("holepunch: peer learned %s:%d", ipStr(peerIP), peerPort)
+	network.Debugf("holepunch: peer learned %s:%d", network.IPStr(peerIP), peerPort)
 
 	// 相手のグローバルアドレスを宛先に固定し、双方向に穴を開ける。
 	if err := punchUntilEstablished(fd, peerIP, peerPort, timeout); err != nil {
@@ -72,7 +74,7 @@ func DialHolePunch(rendezvousIP [4]byte, rendezvousPort uint16, sessionID string
 	// 受信に戻す (udpLink.ReadPacket は無期限ブロックを前提にしている)。
 	_ = syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &syscall.Timeval{})
 	link.setRemote(peerIP, peerPort)
-	debugf("holepunch: established with %s:%d", ipStr(peerIP), peerPort)
+	network.Debugf("holepunch: established with %s:%d", network.IPStr(peerIP), peerPort)
 	return link, nil
 }
 

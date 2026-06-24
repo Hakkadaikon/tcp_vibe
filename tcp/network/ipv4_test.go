@@ -1,4 +1,4 @@
-package tcp
+package network
 
 import (
 	"testing"
@@ -32,8 +32,8 @@ func TestIPv4Header_RoundTrip(t *testing.T) {
 			Version: 4, IHL: 5,
 			TotalLength: totalLen, ID: id, TTL: ttl, Protocol: proto,
 		}
-		putBe32(h.SrcAddr[:], 0, sa)
-		putBe32(h.DstAddr[:], 0, da)
+		PutBe32(h.SrcAddr[:], 0, sa)
+		PutBe32(h.DstAddr[:], 0, da)
 		got, err := ParseIPv4Header(h.Marshal())
 		if err != nil {
 			return false
@@ -68,9 +68,9 @@ func TestParseIPv4Header_IHLBoundary(t *testing.T) {
 	// IHL=6: 24 バイトヘッダ。
 	raw := make([]byte, 24)
 	raw[0] = 0x46 // version=4 IHL=6
-	putBe16(raw, 2, 24)
+	PutBe16(raw, 2, 24)
 	raw[9] = 6
-	putBe16(raw, 10, Checksum(raw[:24]))
+	PutBe16(raw, 10, Checksum(raw[:24]))
 	h, err := ParseIPv4Header(raw)
 	if err != nil {
 		t.Fatalf("IHL=6 should parse: %v", err)
@@ -86,7 +86,7 @@ func TestParseIPv4Header_IHLBoundary(t *testing.T) {
 	}
 }
 
-// tcpSegment は TotalLength で切り詰め、末尾パディングを除く。範囲外は弾く。
+// TCPSegment は TotalLength で切り詰め、末尾パディングを除く。範囲外は弾く。
 func TestTCPSegmentTruncatesAndValidates(t *testing.T) {
 	// IP(20) + TCP(20) = 40 バイトの正当パケットに 6 バイトのパディングを付ける。
 	ip := IPv4Header{Version: 4, IHL: 5, Protocol: 6, TotalLength: 40, TTL: 64,
@@ -94,7 +94,7 @@ func TestTCPSegmentTruncatesAndValidates(t *testing.T) {
 	pkt := append(ip.Marshal(), make([]byte, 20)...) // TCP 部
 	pkt = append(pkt, 1, 2, 3, 4, 5, 6)              // パディング
 
-	seg, ok := tcpSegment(ip, pkt)
+	seg, ok := TCPSegment(ip, pkt)
 	if !ok {
 		t.Fatal("正当な TotalLength が弾かれた")
 	}
@@ -105,14 +105,14 @@ func TestTCPSegmentTruncatesAndValidates(t *testing.T) {
 	// TotalLength > 実バッファ → 弾く。
 	bad := ip
 	bad.TotalLength = uint16(len(pkt) + 10)
-	if _, ok := tcpSegment(bad, pkt); ok {
+	if _, ok := TCPSegment(bad, pkt); ok {
 		t.Fatal("TotalLength > バッファを弾かなかった")
 	}
 
 	// TotalLength < ヘッダ長 → 弾く。
 	bad2 := ip
 	bad2.TotalLength = 10
-	if _, ok := tcpSegment(bad2, pkt); ok {
+	if _, ok := TCPSegment(bad2, pkt); ok {
 		t.Fatal("TotalLength < ヘッダ長を弾かなかった")
 	}
 }
@@ -121,7 +121,7 @@ func TestTCPSegmentTruncatesAndValidates(t *testing.T) {
 func TestParseIPv4Header_ShortRead(t *testing.T) {
 	ok := make([]byte, 20)
 	ok[0] = 0x45
-	putBe16(ok, 10, Checksum(ok[:20]))
+	PutBe16(ok, 10, Checksum(ok[:20]))
 	if _, err := ParseIPv4Header(ok); err != nil {
 		t.Fatalf("20 bytes should parse: %v", err)
 	}

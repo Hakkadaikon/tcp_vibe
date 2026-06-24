@@ -2,6 +2,8 @@
 
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"errors"
 	"fmt"
@@ -112,27 +114,27 @@ func (r *Rendezvous) handle(msg string, from *syscall.SockaddrInet4) {
 		// 1 端目。相手待ち。アドレスを記録するだけ (まだ返さない)。
 		r.sessions[sid] = from
 		r.mu.Unlock()
-		debugf("rendezvous: session %q 1端目 %s:%d 登録", sid, ipStr(from.Addr), from.Port)
+		network.Debugf("rendezvous: session %q 1端目 %s:%d 登録", sid, network.IPStr(from.Addr), from.Port)
 		return
 	}
 	if first.Addr == from.Addr && first.Port == from.Port {
 		// 同一端からの再送 (UDP の欠落対策で client は登録を繰り返す)。
 		// 自分自身とペアにしないよう無視する。
 		r.mu.Unlock()
-		debugf("rendezvous: session %q 1端目の再送を無視 %s:%d", sid, ipStr(from.Addr), from.Port)
+		network.Debugf("rendezvous: session %q 1端目の再送を無視 %s:%d", sid, network.IPStr(from.Addr), from.Port)
 		return
 	}
 	// 2 端目が揃った。ペアを消費し、両端へ相手アドレスを返す。
 	delete(r.sessions, sid)
 	r.mu.Unlock()
-	debugf("rendezvous: session %q 2端目 %s:%d。ペア成立", sid, ipStr(from.Addr), from.Port)
+	network.Debugf("rendezvous: session %q 2端目 %s:%d。ペア成立", sid, network.IPStr(from.Addr), from.Port)
 	r.reply(first, from) // 1 端目へ 2 端目のアドレス
 	r.reply(from, first) // 2 端目へ 1 端目のアドレス
 }
 
 // reply は to へ peer のグローバルアドレスを通知する。
 func (r *Rendezvous) reply(to, peer *syscall.SockaddrInet4) {
-	msg := fmt.Sprintf("%s%s:%d", peerPrefix, ipStr(peer.Addr), peer.Port)
+	msg := fmt.Sprintf("%s%s:%d", peerPrefix, network.IPStr(peer.Addr), peer.Port)
 	_ = syscall.Sendto(r.fd, []byte(msg), 0, to)
 }
 

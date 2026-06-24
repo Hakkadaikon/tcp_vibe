@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"testing"
 	"time"
@@ -36,7 +38,7 @@ func drainPeer(t *testing.T, peer Link) (TCPHeader, bool) {
 // まず IP を剥がす。
 func parseSentSegment(t *testing.T, pkt []byte) (TCPHeader, error) {
 	t.Helper()
-	ip, err := ParseIPv4Header(pkt)
+	ip, err := network.ParseIPv4Header(pkt)
 	if err != nil {
 		return TCPHeader{}, err
 	}
@@ -505,7 +507,7 @@ func drainPeerNonblockKeep(peer Link) (TCPHeader, bool) {
 	pkt := pl.inbox[0]
 	pl.inbox = pl.inbox[1:]
 	pl.mu.Unlock()
-	ip, err := ParseIPv4Header(pkt)
+	ip, err := network.ParseIPv4Header(pkt)
 	if err != nil {
 		return TCPHeader{}, false
 	}
@@ -559,7 +561,7 @@ func drainPeerNonblock(peer Link) (TCPHeader, bool) {
 	if err != nil {
 		return TCPHeader{}, false
 	}
-	ip, err := ParseIPv4Header(pkt)
+	ip, err := network.ParseIPv4Header(pkt)
 	if err != nil {
 		return TCPHeader{}, false
 	}

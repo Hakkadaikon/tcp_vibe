@@ -2,6 +2,8 @@
 
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"errors"
 	"syscall"
@@ -72,7 +74,7 @@ func buildEthFrame(dst, src [6]byte, ethType uint16, payload []byte) []byte {
 	frame := make([]byte, ethHeaderSize+len(payload))
 	copy(frame[0:6], dst[:])
 	copy(frame[6:12], src[:])
-	putBe16(frame, 12, ethType)
+	network.PutBe16(frame, 12, ethType)
 	copy(frame[ethHeaderSize:], payload)
 	return frame
 }
@@ -87,7 +89,7 @@ func (l *afPacketLink) handleInboundFrame(frame []byte) (ip []byte, reply []byte
 	if len(frame) < ethHeaderSize {
 		return nil, nil
 	}
-	ethType := be16(frame, 12)
+	ethType := network.Be16(frame, 12)
 	payload := frame[ethHeaderSize:]
 	switch ethType {
 	case ethTypeIPv4:
@@ -119,7 +121,7 @@ func (l *afPacketLink) WritePacket(pkt []byte) error {
 	if l.closed {
 		return ErrLinkClosed
 	}
-	h, err := ParseIPv4Header(pkt)
+	h, err := network.ParseIPv4Header(pkt)
 	if err != nil {
 		return err
 	}

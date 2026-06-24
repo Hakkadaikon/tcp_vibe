@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"testing"
 	"time"
@@ -20,7 +22,7 @@ func drainSegs(peer Link) []sentSeg {
 		if err != nil {
 			return out
 		}
-		ip, err := ParseIPv4Header(pkt)
+		ip, err := network.ParseIPv4Header(pkt)
 		if err != nil {
 			continue
 		}

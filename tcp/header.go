@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import "errors"
 
 // TCP の制御ビット (RFC 9293 §3.1)。下位 6 ビットを使う。
@@ -41,15 +43,15 @@ var (
 // チェックサムは擬似ヘッダが必要なため 0 のままにし、呼び出し側が TCPChecksum で埋める。
 func (h TCPHeader) Marshal() []byte {
 	b := make([]byte, 20+len(h.Options))
-	putBe16(b, 0, h.SrcPort)
-	putBe16(b, 2, h.DstPort)
-	putBe32(b, 4, h.SeqNum)
-	putBe32(b, 8, h.AckNum)
+	network.PutBe16(b, 0, h.SrcPort)
+	network.PutBe16(b, 2, h.DstPort)
+	network.PutBe32(b, 4, h.SeqNum)
+	network.PutBe32(b, 8, h.AckNum)
 	b[12] = DataOffsetForOptions(len(h.Options)) << 4 // data offset, reserved=0
 	b[13] = byte(h.Flags & 0x3F)
-	putBe16(b, 14, h.Window)
-	putBe16(b, 16, h.Checksum)
-	putBe16(b, 18, h.UrgentPtr)
+	network.PutBe16(b, 14, h.Window)
+	network.PutBe16(b, 16, h.Checksum)
+	network.PutBe16(b, 18, h.UrgentPtr)
 	copy(b[20:], h.Options)
 	return b
 }
@@ -72,15 +74,15 @@ func ParseTCPHeader(b []byte) (TCPHeader, error) {
 		opts = b[20:hdrLen] // オプション領域 (固定 20 バイト超)
 	}
 	return TCPHeader{
-		SrcPort:    be16(b, 0),
-		DstPort:    be16(b, 2),
-		SeqNum:     be32(b, 4),
-		AckNum:     be32(b, 8),
+		SrcPort:    network.Be16(b, 0),
+		DstPort:    network.Be16(b, 2),
+		SeqNum:     network.Be32(b, 4),
+		AckNum:     network.Be32(b, 8),
 		DataOffset: dataOffset,
 		Flags:      Flags(b[13] & 0x3F),
-		Window:     be16(b, 14),
-		Checksum:   be16(b, 16),
-		UrgentPtr:  be16(b, 18),
+		Window:     network.Be16(b, 14),
+		Checksum:   network.Be16(b, 16),
+		UrgentPtr:  network.Be16(b, 18),
 		Options:    opts,
 	}, nil
 }

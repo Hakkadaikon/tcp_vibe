@@ -1,4 +1,4 @@
-package tcp
+package network
 
 import (
 	"testing"
@@ -73,7 +73,7 @@ func TestChecksum_VerifyRoundTripAndBitFlip(t *testing.T) {
 		buf := make([]byte, size)
 		copy(buf, payload)
 		cs := Checksum(buf) // 末尾 2 バイトは 0 の状態で計算
-		putBe16(buf, len(buf)-2, cs)
+		PutBe16(buf, len(buf)-2, cs)
 		// 検証往復: 正しい checksum 込みなら 0。
 		if Checksum(buf) != 0 {
 			return false
@@ -98,7 +98,7 @@ func TestTCPChecksum_VerifyRoundTrip(t *testing.T) {
 	seg[0], seg[1] = 0x30, 0x39 // src port 12345
 	seg[2], seg[3] = 0x00, 0x50 // dst port 80
 	cs := TCPChecksum(src, dst, seg)
-	putBe16(seg, 16, cs) // checksum フィールド
+	PutBe16(seg, 16, cs) // checksum フィールド
 	if got := TCPChecksum(src, dst, seg); got != 0 {
 		t.Errorf("TCP checksum verify round-trip should be 0, got %#04x", got)
 	}

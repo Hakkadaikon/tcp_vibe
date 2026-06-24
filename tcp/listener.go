@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"sync"
 	"time"
@@ -155,15 +157,15 @@ func (s *Stack) tickLoop() {
 // demux は 1 IPv4 パケットを解析し、4-tuple で接続を引いて振り分ける。
 // 照合順序: 完全一致 TCB → LISTEN 派生 → RST 生成 (RFC 9293 §3.10.7)。
 func (s *Stack) demux(pkt []byte) {
-	ip, err := ParseIPv4Header(pkt)
+	ip, err := network.ParseIPv4Header(pkt)
 	if err != nil || ip.Protocol != 6 { // 6 = TCP
 		return
 	}
-	segment, ok := tcpSegment(ip, pkt)
+	segment, ok := network.TCPSegment(ip, pkt)
 	if !ok {
 		return // TotalLength がバッファと矛盾するパケットは破棄。
 	}
-	if TCPChecksum(ip.SrcAddr, ip.DstAddr, segment) != 0 {
+	if network.TCPChecksum(ip.SrcAddr, ip.DstAddr, segment) != 0 {
 		return // チェックサム不一致は破棄。
 	}
 	h, err := ParseTCPHeader(segment)
@@ -202,7 +204,7 @@ func (s *Stack) demux(pkt []byte) {
 
 // demuxListen は LISTEN への受信を処理する (RFC 9293 §3.10.7.2)。
 //   - RST → 無視 / ACK → RST 返す / SYN → 新 TCB 派生 (LISTEN は残す) / else drop
-func (s *Stack) demuxListen(le *listenEntry, ip IPv4Header, h TCPHeader, payload []byte, tp fourTuple) {
+func (s *Stack) demuxListen(le *listenEntry, ip network.IPv4Header, h TCPHeader, payload []byte, tp fourTuple) {
 	if h.Flags.Has(FlagRST) {
 		return
 	}
@@ -256,7 +258,7 @@ func (s *Stack) maybeDeliver(c *Conn) {
 
 // sendClosedRst は TCB の無い受信への RST 応答を出す (RFC 9293 §3.10.7.1)。
 // 使い捨ての CLOSED Conn に処理を委ね、RST 生成・RST への無応答を再利用する。
-func (s *Stack) sendClosedRst(ip IPv4Header, h TCPHeader, payload []byte) {
+func (s *Stack) sendClosedRst(ip network.IPv4Header, h TCPHeader, payload []byte) {
 	remote := Endpoint{IP: ip.SrcAddr, Port: h.SrcPort}
 	local := Endpoint{IP: ip.DstAddr, Port: h.DstPort}
 	tmp := NewConn(s.link, s.clock, local, remote) // CLOSED 状態

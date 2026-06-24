@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"errors"
 	"sync"
@@ -42,11 +44,11 @@ var (
 // Marshal は ARP パケットを 28 バイトへ書き出す。
 func (a ARPPacket) Marshal() []byte {
 	b := make([]byte, arpPacketSize)
-	putBe16(b, 0, arpHWTypeEthernet) // hardware type
-	putBe16(b, 2, ethTypeIPv4)       // protocol type
-	b[4] = 6                         // hlen
-	b[5] = 4                         // plen
-	putBe16(b, 6, a.Op)
+	network.PutBe16(b, 0, arpHWTypeEthernet) // hardware type
+	network.PutBe16(b, 2, ethTypeIPv4)       // protocol type
+	b[4] = 6                                 // hlen
+	b[5] = 4                                 // plen
+	network.PutBe16(b, 6, a.Op)
 	copy(b[8:14], a.SenderMAC[:])
 	copy(b[14:18], a.SenderIP[:])
 	copy(b[18:24], a.TargetMAC[:])
@@ -60,16 +62,16 @@ func ParseARP(b []byte) (ARPPacket, error) {
 	if len(b) < arpPacketSize {
 		return ARPPacket{}, errARPShort
 	}
-	if be16(b, 0) != arpHWTypeEthernet {
+	if network.Be16(b, 0) != arpHWTypeEthernet {
 		return ARPPacket{}, errARPHWType
 	}
-	if be16(b, 2) != ethTypeIPv4 {
+	if network.Be16(b, 2) != ethTypeIPv4 {
 		return ARPPacket{}, errARPPType
 	}
 	if b[4] != 6 || b[5] != 4 {
 		return ARPPacket{}, errARPAddrLen
 	}
-	a := ARPPacket{Op: be16(b, 6)}
+	a := ARPPacket{Op: network.Be16(b, 6)}
 	copy(a.SenderMAC[:], b[8:14])
 	copy(a.SenderIP[:], b[14:18])
 	copy(a.TargetMAC[:], b[18:24])

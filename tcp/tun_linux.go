@@ -2,6 +2,8 @@
 
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"errors"
 	"os"
@@ -69,7 +71,7 @@ func (l *tunLink) WritePacket(pkt []byte) error {
 		return ErrLinkClosed
 	}
 	n, err := l.f.Write(pkt)
-	debugf("tun: write n=%d err=%v", n, err)
+	network.Debugf("tun: write n=%d err=%v", n, err)
 	return err
 }
 
@@ -80,7 +82,7 @@ func (l *tunLink) ReadPacket() ([]byte, error) {
 	}
 	buf := make([]byte, 65535)
 	n, err := l.f.Read(buf)
-	debugf("tun: read n=%d err=%v", n, err)
+	network.Debugf("tun: read n=%d err=%v", n, err)
 	if err != nil {
 		return nil, err
 	}

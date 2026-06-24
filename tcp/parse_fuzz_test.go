@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import "testing"
 
 // ワイヤ形式パーサ (trust boundary) の fuzz target。任意バイト列で panic や
@@ -40,17 +42,17 @@ func FuzzParseTCPOptions(f *testing.F) {
 }
 
 func FuzzParseIPv4Header(f *testing.F) {
-	f.Add(IPv4Header{Protocol: 6, TotalLength: 20, TTL: 64,
+	f.Add(network.IPv4Header{Protocol: 6, TotalLength: 20, TTL: 64,
 		SrcAddr: [4]byte{10, 0, 0, 1}, DstAddr: [4]byte{10, 0, 0, 2}}.Marshal())
 	f.Add([]byte{0x45, 0, 0, 20})                                                // 20 バイト未満
 	f.Add([]byte{0x4F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}) // IHL=15 だが 20 バイトしか無い
 
 	f.Fuzz(func(t *testing.T, b []byte) {
-		h, err := ParseIPv4Header(b)
+		h, err := network.ParseIPv4Header(b)
 		if err != nil {
 			return
 		}
 		// 受理した IP ヘッダから TCP セグメント切り出しまで境界外を読まない。
-		_, _ = tcpSegment(h, b)
+		_, _ = network.TCPSegment(h, b)
 	})
 }

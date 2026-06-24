@@ -2,6 +2,8 @@
 
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/network"
+
 import (
 	"bytes"
 	"errors"
@@ -69,8 +71,8 @@ func TestHandleInboundFrame_ARPRequestForSelf(t *testing.T) {
 	if !bytes.Equal(reply[0:6], reqMAC[:]) {
 		t.Errorf("reply dst MAC = %v, want %v", reply[0:6], reqMAC)
 	}
-	if be16(reply, 12) != ethTypeARP {
-		t.Errorf("reply ethType = %#x, want ARP", be16(reply, 12))
+	if network.Be16(reply, 12) != ethTypeARP {
+		t.Errorf("reply ethType = %#x, want ARP", network.Be16(reply, 12))
 	}
 	a, err := ParseARP(reply[ethHeaderSize:])
 	if err != nil {
