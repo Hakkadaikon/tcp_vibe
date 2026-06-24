@@ -11,6 +11,30 @@ RFC 9293 の状態機械と RFC 5961 の対策を中心に、握手と close だ
 このスタックはカーネルの TCP/IP を迂回し、IPv4 と TCP のセグメントを自分で組み立てて解釈する。
 TCP の状態遷移とセグメント処理を書くことを主眼に置いているため、ソケット API も標準の `encoding/binary` も使わず、部品を下から積み上げている。
 
+レイヤ構造は次のとおりである。
+状態機械からフロー制御までを自作スタックが担い、カーネルやメモリに触れるのはリンク層から下だけである。
+
+```mermaid
+flowchart TD
+    App["アプリ (Send/Recv, Listen/Accept)"]
+
+    subgraph Self["自作スタック (カーネル不使用)"]
+        SM["状態機械"]
+        Data["データ転送と再送"]
+        CC["輻輳制御"]
+        FC["フロー制御"]
+        Opt["オプションとPAWS"]
+        Mux["多重化 (4-tuple)"]
+    end
+
+    Link["リンク層 (Link 抽象): IP パケットを運ぶ口"]
+    Carrier["運搬手段: メモリ仮想 / Unix socket / UDP / TUN / AF_PACKET"]
+
+    App --> Self
+    Self --> Link
+    Link --> Carrier
+```
+
 実装している機能は次のとおりである。
 
 - 基盤：チェックサム (擬似ヘッダ込み)、IPv4 と TCP のヘッダの marshal/parse、mod 2^32 のシーケンス番号比較、バイトストリームからの IPv4 パケット再分割。

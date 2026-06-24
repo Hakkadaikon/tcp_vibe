@@ -25,19 +25,22 @@ just check
 ## root も TUN も要らないユーザー空間デモ
 
 UDP ソケットを使うリンク (`--link=udp`) と Unix domain socket を使うリンク (`--link=unix`) は、raw socket でないため特権を要さない。
-自作スタックが組み立てた IP パケットを土管のペイロードとしてそのまま運び、受信側はその中身を IP パケットとして自作スタックに渡す。
-TCP の状態遷移とセグメント処理は自作スタックがすべて行い、土管はパケットを運ぶだけである。
-ソケットは標準の `net` パッケージを使わず `syscall` で直接開く。
+このリンクの役割は次のとおりである。
 
-まずバイナリをビルドする。
-sudo で実行する場合に備え、独立したファイル `bin/tcpdemo` に出力する。
+- 自作スタックが組み立てた IP パケットを土管のペイロードとしてそのまま運ぶ。
+- 受信側はその中身を IP パケットとして自作スタックに渡す。
+- TCP の状態遷移とセグメント処理は自作スタックがすべて行い、土管はパケットを運ぶだけである。
+- ソケットは標準の `net` パッケージを使わず `syscall` で直接開く。
+
+手順は次の 2 ステップである。
+
+1. バイナリをビルドする。sudo で実行する場合に備え、独立したファイル `bin/tcpdemo` に出力する。
 
 ```sh
 just demo-build
 ```
 
-localhost の 2 ポートを使い、server (受動オープン) と client (能動オープン) を別プロセスとして起動する。
-`--local-ip` などは自作スタックのエンドポイントで、`--udp-*` の運搬先とは別物である。
+2. localhost の 2 ポートを使い、server (受動オープン) と client (能動オープン) を別プロセスとして起動する。`--local-ip` などは自作スタックのエンドポイントで、`--udp-*` の運搬先とは別物である。
 
 ```sh
 ./bin/tcpdemo --mode=server --link=udp --udp-local-port=40000 --udp-remote-port=40001 --local-ip=10.0.0.1 --local-port=9000 --remote-ip=10.0.0.2 --remote-port=9001 --msl=2s
@@ -64,7 +67,9 @@ build tag `e2e` で分離してあるため、通常の `just test` や `just ch
 ## 実機での実通信 (TUN)
 
 root のある Linux 実機では、TUN デバイス経由で自作スタック同士の握手を実演できる。
-まず TUN デバイスを作り、アドレスを割り当てて起動する。
+手順は次の 3 ステップである。
+
+1. TUN デバイスを作り、アドレスを割り当てて起動する。
 
 ```sh
 sudo ip tuntap add dev tun0 mode tun
@@ -72,14 +77,13 @@ sudo ip addr add 10.0.0.1/24 dev tun0
 sudo ip link set tun0 up
 ```
 
-カーネルの TCP/IP と同じサブネットを共有すると、自作スタック宛のセグメントにカーネルが RST を返すことがある。
-自作スタック同士だけで通信するなら不要だが、カーネルの TCP と混在させるときは、対象サブネット発の RST を抑止する。
+2. カーネルの RST を抑止する。カーネルの TCP/IP と同じサブネットを共有すると、自作スタック宛のセグメントにカーネルが RST を返すことがある。自作スタック同士だけで通信するなら不要だが、カーネルの TCP と混在させるときは対象サブネット発の RST を止める。
 
 ```sh
 sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s 10.0.0.0/24 -j DROP
 ```
 
-別々の TUN デバイスを用意し、一方を server、もう一方を client として起動すると、握手から close までが進む。
+3. 別々の TUN デバイスを用意し、一方を server、もう一方を client として起動すると、握手から close までが進む。
 
 ```sh
 sudo ./bin/tcpdemo --mode=server --tun=tun0 --local-ip=10.0.0.1 --local-port=9000 --remote-ip=10.0.0.2 --remote-port=9001
