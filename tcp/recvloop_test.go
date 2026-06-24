@@ -145,6 +145,23 @@ func TestReceiveLoopDropsInvalidPackets(t *testing.T) {
 	waitState(t, c, SynReceived)
 }
 
+// 末尾パディング付きの正当パケットが正しく処理される (パディングが TCP セグメントへ
+// 混入しない)。dispatch は TotalLength で切り詰めてから checksum/parse する。
+func TestReceiveLoopHandlesTrailingPadding(t *testing.T) {
+	c, peer, _ := newTestReceiver(t)
+
+	// 正当な SYN パケットを組み、末尾にゴミパディングを連結する。
+	// TotalLength はパディングを含まない (パディングは TCP セグメント外)。
+	pkt := buildSegment(TCPHeader{Flags: Flags(FlagSYN), SeqNum: 3000, DataOffset: 5}, nil)
+	padded := append(pkt, 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11)
+	if err := peer.WritePacket(padded); err != nil {
+		t.Fatalf("WritePacket(padded) 失敗: %v", err)
+	}
+
+	// パディングが TCP セグメントへ混入していなければ checksum が通り遷移する。
+	waitState(t, c, SynReceived)
+}
+
 // 終了: link を閉じると受信ループ goroutine が終了し Stop が返る (リークしない)。
 func TestReceiveLoopStopsWhenLinkClosed(t *testing.T) {
 	a, _ := NewPipeLink()

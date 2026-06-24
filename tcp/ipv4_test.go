@@ -86,6 +86,37 @@ func TestParseIPv4Header_IHLBoundary(t *testing.T) {
 	}
 }
 
+// tcpSegment は TotalLength で切り詰め、末尾パディングを除く。範囲外は弾く。
+func TestTCPSegmentTruncatesAndValidates(t *testing.T) {
+	// IP(20) + TCP(20) = 40 バイトの正当パケットに 6 バイトのパディングを付ける。
+	ip := IPv4Header{Version: 4, IHL: 5, Protocol: 6, TotalLength: 40, TTL: 64,
+		SrcAddr: [4]byte{10, 0, 0, 1}, DstAddr: [4]byte{10, 0, 0, 2}}
+	pkt := append(ip.Marshal(), make([]byte, 20)...) // TCP 部
+	pkt = append(pkt, 1, 2, 3, 4, 5, 6)              // パディング
+
+	seg, ok := tcpSegment(ip, pkt)
+	if !ok {
+		t.Fatal("正当な TotalLength が弾かれた")
+	}
+	if len(seg) != 20 {
+		t.Fatalf("パディングが切り詰められていない: len=%d want 20", len(seg))
+	}
+
+	// TotalLength > 実バッファ → 弾く。
+	bad := ip
+	bad.TotalLength = uint16(len(pkt) + 10)
+	if _, ok := tcpSegment(bad, pkt); ok {
+		t.Fatal("TotalLength > バッファを弾かなかった")
+	}
+
+	// TotalLength < ヘッダ長 → 弾く。
+	bad2 := ip
+	bad2.TotalLength = 10
+	if _, ok := tcpSegment(bad2, pkt); ok {
+		t.Fatal("TotalLength < ヘッダ長を弾かなかった")
+	}
+}
+
 // short read 拒否 (20byte OK / 19byte エラー)。宣言長 > 実バッファもエラー。
 func TestParseIPv4Header_ShortRead(t *testing.T) {
 	ok := make([]byte, 20)

@@ -364,6 +364,155 @@ func TestGracefulActiveClose(t *testing.T) {
 	_ = finSeq
 }
 
+// SYN-RECEIVED で acceptable でない ACK (ack=SND.UNA-1, ただし 5961 範囲内) は
+// ESTABLISHED へ昇格させない。正常な ack=SND.NXT のみ昇格する (RFC 9293 §3.10.7.4)。
+func TestSynReceivedRejectsUnacceptableAck(t *testing.T) {
+	mk := func() *Conn {
+		c, _, _ := newTestConn(t)
+		c.tcb.state = SynReceived
+		c.tcb.origin = OriginPassive
+		c.tcb.snd.iss = 4000
+		c.tcb.snd.una = 4000
+		c.tcb.snd.nxt = 4001 // SYN-ACK 送出済 (ISS+1)
+		c.tcb.rcv.nxt = 8000
+		c.tcb.rcv.wnd = 1000
+		c.tcb.rcv.irs = 7999
+		c.tcb.maxSndWnd = uint32(maxWindow)
+		return c
+	}
+
+	// acceptable でない ACK (ack=SND.UNA=4000, AcceptableAck は SND.UNA<ACK のため不成立)。
+	// 5961 範囲 [SND.UNA-maxWnd, SND.NXT] 内なので reset もしない: SYN-RECEIVED 維持。
+	c := mk()
+	c.onSegment(TCPHeader{Flags: Flags(FlagACK), SeqNum: 8000, AckNum: 4000}, nil)
+	if c.State() != SynReceived {
+		t.Fatalf("acceptable でない ACK で昇格してはいけない: got %v", c.State())
+	}
+
+	// 正常な ACK (ack=SND.NXT=4001) → ESTABLISHED。
+	c2 := mk()
+	c2.onSegment(TCPHeader{Flags: Flags(FlagACK), SeqNum: 8000, AckNum: 4001}, nil)
+	if c2.State() != Established {
+		t.Fatalf("acceptable な ACK で ESTABLISHED へ昇格するはず: got %v", c2.State())
+	}
+}
+
+// fast retransmit 直後に RTO 未満の時刻で Tick しても二重再送しない。
+// 再送時に sentAt を更新し RTO タイマを再起動するため (RFC 6298)。
+func TestFastRetransmitResetsRtoTimer(t *testing.T) {
+	c, peer, fc := estab(t)
+	c.tcb.snd.nxt = 4000
+	// 1 セグメント送信して再送キューに積む。
+	c.tcb.sndBuf = append(c.tcb.sndBuf, make([]byte, 100)...)
+	c.tcb.snd.wnd = 65535
+	c.tcb.cong.cwnd = 65535
+	c.flushSend()
+	_ = expectFlags(t, peer, Flags(FlagPSH|FlagACK)) // 初回送出を捨てる
+	if len(c.tcb.retxQueue) == 0 {
+		t.Fatal("再送キューに積まれていない")
+	}
+
+	rto := c.tcb.curRTO
+	// 初回送出から RTO 直前まで時間を進めてから fast retransmit を誘発する。
+	// バグ (sentAt 未更新) があると、再送後の sentAt は初回のままで RTO がすぐ満了し、
+	// 直後の Tick で同じセグメントを二重再送してしまう。
+	fc.advance(rto - 10*time.Nanosecond)
+
+	// 重複 ACK を 3 つ入れて fast retransmit を誘発する。
+	// 窓更新と区別するため Window は snd.wnd と同値にする (isDupAck の条件)。
+	dup := func() {
+		c.onSegment(TCPHeader{Flags: Flags(FlagACK), SeqNum: 8000, AckNum: 4000, Window: 65535}, nil)
+	}
+	dup()
+	dup()
+	dup() // 3 つ目で fast retransmit
+	// fast retransmit の再送セグメントを捨てる。
+	if _, ok := drainPeerNonblockKeep(peer); !ok {
+		t.Fatal("fast retransmit が送られていない")
+	}
+
+	// fast retransmit 後に RTO 未満だけ進めて Tick: 二重再送されてはいけない。
+	fc.advance(rto - time.Nanosecond)
+	c.Tick()
+	if _, ok := drainPeerNonblockKeep(peer); ok {
+		t.Fatal("fast retransmit 直後の RTO 未満 Tick で二重再送された")
+	}
+}
+
+// TIME-WAIT で FIN 再送 (古い seq=peerFinSeq) → RCV.NXT を動かさず ACK 再送 + 2MSL 再起動。
+func TestTimeWaitFinRetransmitOldSeqRestartsTimer(t *testing.T) {
+	c, peer, fc := newTestConn(t)
+	c.tcb.state = TimeWait
+	c.tcb.snd.una = 4000
+	c.tcb.snd.nxt = 4000
+	c.tcb.rcv.nxt = 8001 // FIN を一度消費済み (peerFinSeq=8000 を消費して 8001 へ)
+	c.tcb.rcv.wnd = 1000
+	c.tcb.peerFin = true
+	c.tcb.peerFinSeq = 8000
+	c.tcb.timeWaitDeadline = fc.Now().Add(timeWaitDuration)
+
+	fc.advance(msl / 2)
+	wantDeadline := fc.Now().Add(timeWaitDuration)
+	beforeNxt := c.RcvNxt()
+	// FIN 再送: seq=8000 (= 既消費の FIN seq)。in-order ガード (seq+len-1==rcv.nxt) は
+	// 8000 != 8001 で満たさないが、TIME-WAIT は ACK 再送 + 2MSL 再起動すべき。
+	c.onSegment(TCPHeader{Flags: Flags(FlagFIN | FlagACK), SeqNum: 8000, AckNum: 4000}, nil)
+
+	if c.State() != TimeWait {
+		t.Fatalf("FIN 再送後も TIME-WAIT 維持のはず: got %v", c.State())
+	}
+	if c.RcvNxt() != beforeNxt {
+		t.Fatalf("FIN 再送で RCV.NXT が動いた: %d -> %d", beforeNxt, c.RcvNxt())
+	}
+	expectFlags(t, peer, Flags(FlagACK)) // ACK 再送
+	if !c.tcb.timeWaitDeadline.Equal(wantDeadline) {
+		t.Fatalf("2MSL タイマが再起動されていない: got %v want %v", c.tcb.timeWaitDeadline, wantDeadline)
+	}
+}
+
+// 非同期状態の CLOSE (RFC 9293 §3.10.4)。SYN-SENT → CLOSED、LISTEN → CLOSED。
+func TestCloseInSynSentGoesToClosed(t *testing.T) {
+	c, peer, _ := newTestConn(t)
+	c.ActiveOpen(2000)
+	_ = expectFlags(t, peer, Flags(FlagSYN))
+	c.Close()
+	if c.State() != Closed {
+		t.Fatalf("SYN-SENT の CLOSE は CLOSED のはず: got %v", c.State())
+	}
+}
+
+func TestCloseInListenGoesToClosed(t *testing.T) {
+	c, _, _ := newTestConn(t)
+	c.PassiveOpen()
+	c.Close()
+	if c.State() != Closed {
+		t.Fatalf("LISTEN の CLOSE は CLOSED のはず: got %v", c.State())
+	}
+}
+
+// drainPeerNonblockKeep は対向に届いたセグメントが 1 つでもあれば取り出して true。
+// peer を閉じず inbox を非ブロッキングに覗く (複数回呼べる)。
+func drainPeerNonblockKeep(peer Link) (TCPHeader, bool) {
+	pl, ok := peer.(*pipeLink)
+	if !ok {
+		return TCPHeader{}, false
+	}
+	pl.mu.Lock()
+	if len(pl.inbox) == 0 {
+		pl.mu.Unlock()
+		return TCPHeader{}, false
+	}
+	pkt := pl.inbox[0]
+	pl.inbox = pl.inbox[1:]
+	pl.mu.Unlock()
+	ip, err := ParseIPv4Header(pkt)
+	if err != nil {
+		return TCPHeader{}, false
+	}
+	h, _ := ParseTCPHeader(pkt[int(ip.IHL)*4:])
+	return h, true
+}
+
 // --- 代表ケース: 許可されない遷移の拒否 ---
 
 // LISTEN で bare ACK → RST 応答、遷移しない。

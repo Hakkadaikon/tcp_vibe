@@ -8,10 +8,10 @@ import (
 // maxWindow は window scale 無しの送信窓上限 (RFC 5961 MAX.SND.WND 既定値)。
 const maxWindow uint16 = 65535
 
-// defaultRcvWindow は接続開始時に広告する既定の受信窓。0 だとデータ/FIN
+// defaultRcvWindow は接続開始時の既定の内部受信窓 (実バイト)。0 だとデータ/FIN
 // (SEG.LEN>0) が受理性テスト (RFC 9293 §3.10.7.4) で弾かれて通信できないため、
-// window scale 無しの最大値を広告する。
-const defaultRcvWindow uint16 = maxWindow
+// window scale 無しの最大値を既定とする (広告時は rcvWindShift で 16bit へ収める)。
+const defaultRcvWindow uint32 = uint32(maxWindow)
 
 // Endpoint は接続端点 (IPv4 アドレスとポート)。送出する IP/TCP ヘッダの
 // 送信元・宛先と、TCP チェックサムの擬似ヘッダに使う。
@@ -84,6 +84,17 @@ func (c *Conn) SndUna() uint32 {
 
 // SndNxt は SND.NXT を返す。
 func (c *Conn) SndNxt() uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tcb.snd.nxt
+}
+
+// issGap は新 incarnation の ISS を旧 max seq からどれだけ離すか (RFC 9293 §3.10.7.4)。
+const issGap uint32 = 64000
+
+// maxSentSeq は自分が送った最大 seq (= SND.NXT) を返す。新 incarnation の ISS を
+// これより大きく採るために使う。ロック順は ct.mu → c.mu を守るため Conn ロック内で読む。
+func (c *Conn) maxSentSeq() uint32 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.tcb.snd.nxt
@@ -171,6 +182,14 @@ func (c *Conn) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch c.tcb.state {
+	case Listen:
+		// LISTEN: 受信待ちだけなので TCB を畳んで CLOSED へ (RFC 9293 §3.10.4)。
+		c.tcb.state = Closed
+	case SynSent:
+		// SYN-SENT: まだ何も確立していない。TCB 削除相当で CLOSED へ。
+		c.tcb.state = Closed
+		c.tcb.retxQueue = nil
+		c.tcb.curRTO = 0
 	case Established, SynReceived:
 		c.send(Flags(FlagFIN|FlagACK), c.tcb.snd.nxt, c.tcb.rcv.nxt)
 		c.tcb.snd.nxt++ // FIN が 1 seq 消費
@@ -365,11 +384,16 @@ func (c *Conn) writeSegOpts(flags Flags, seq, ack uint32, payload, opts []byte) 
 		}
 		opts = o.Marshal()
 	}
-	win := c.tcb.rcv.wnd
-	// SYN を含まないセグメントの window だけスケールする (RFC 7323 §2.3)。
-	if !flags.Has(FlagSYN) && c.tcb.rcvWindShift > 0 {
-		win = uint16(uint32(c.tcb.rcv.wnd) >> c.tcb.rcvWindShift)
+	// 内部受信窓 (実バイト) を 16bit の広告窓へ収める。SYN/SYN-ACK は生値
+	// (スケール無し)、それ以外は rcvWindShift で右シフトする (RFC 7323 §2.3)。
+	w := c.tcb.rcv.wnd
+	if !flags.Has(FlagSYN) {
+		w >>= c.tcb.rcvWindShift
 	}
+	if w > uint32(maxWindow) {
+		w = uint32(maxWindow) // 16bit に飽和 (シフト未折衝で 65535 超のとき)
+	}
+	win := uint16(w)
 	if flags.Has(FlagACK) {
 		c.tcb.lastAckSent = ack
 	}
@@ -453,7 +477,7 @@ func (t *TCB) inWindow(seq uint32) bool {
 	if t.rcv.wnd == 0 {
 		return seq == t.rcv.nxt
 	}
-	return SeqLEQ(t.rcv.nxt, seq) && SeqLT(seq, t.rcv.nxt+uint32(t.rcv.wnd))
+	return SeqLEQ(t.rcv.nxt, seq) && SeqLT(seq, t.rcv.nxt+t.rcv.wnd)
 }
 
 // acceptable は受理性テスト (RFC 9293 §3.10.7.4) を判定する。
@@ -584,6 +608,15 @@ func (c *Conn) onSegmentSynSent(h TCPHeader) {
 func (c *Conn) onSegmentSynchronized(h TCPHeader, payload []byte) {
 	o, _ := ParseTCPOptions(h.Options) // 不正 option は無視 (ゼロ値で続行)
 
+	// TIME-WAIT で FIN を受けたら、seq が古く受理性を満たさない再送でも ACK を再送し
+	// 2MSL を再起動する (RFC 9293 §3.10.7.4 Note)。RCV.NXT は動かさない
+	// (FIN は既に一度消費済み)。RST は通常経路に任せる (即 abort)。
+	if c.tcb.state == TimeWait && h.Flags.Has(FlagFIN) && !h.Flags.Has(FlagRST) {
+		c.sendAck()
+		c.restartTimeWait()
+		return
+	}
+
 	// 0. PAWS: timestamps 折衝済みで TSopt を持つ非 RST セグメントが TS.Recent より
 	//    厳密に古ければ受理しない (RFC 7323 §5.3)。acceptability より前に行い、
 	//    drop しても ACK を返す。RST は PAWS 対象外。
@@ -673,6 +706,19 @@ func (c *Conn) resetConnection() {
 // 範囲外なら challenge ACK を返して false を返す (SND.UNA を前進させない)。
 // 範囲内なら acceptable ACK のときだけ SND.UNA を前進させ、状態遷移する。
 func (c *Conn) handleAck(h TCPHeader, payload []byte) bool {
+	// SYN-RECEIVED は握手の最終 ACK だけを受理する (RFC 9293 §3.10.7.4)。
+	// acceptable ACK (SND.UNA < ACK =< SND.NXT) でのみ ESTABLISHED へ昇格する。
+	// 不成立かつ 5961 範囲内なら据え置き (challenge ACK)、範囲外なら RST を返す。
+	if c.tcb.state == SynReceived && !AcceptableAck(c.tcb.snd.una, h.AckNum, c.tcb.snd.nxt) {
+		lo := c.tcb.snd.una - c.tcb.maxSndWnd
+		if SeqLT(h.AckNum, lo) || SeqGT(h.AckNum, c.tcb.snd.nxt) {
+			c.sendRst(h.AckNum)
+		} else {
+			c.sendChallengeAck()
+		}
+		return false
+	}
+
 	lo := c.tcb.snd.una - c.tcb.maxSndWnd
 	if SeqLT(h.AckNum, lo) || SeqGT(h.AckNum, c.tcb.snd.nxt) {
 		c.sendChallengeAck()
@@ -741,6 +787,7 @@ func (c *Conn) fastRetransmit() {
 	front := &c.tcb.retxQueue[0]
 	c.writeSeg(front.flags, front.seq, c.tcb.rcv.nxt, front.payload)
 	front.retransmitted = true
+	front.sentAt = c.tcb.clock() // RTO タイマ再起動。checkRetransmit の二重送出を防ぐ。
 }
 
 // synOptionBytes は SYN / SYN-ACK に載せる自分のオプションを生バイトで返す。

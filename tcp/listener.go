@@ -59,16 +59,51 @@ func (s *Stack) track(c *Conn) {
 	s.mu.Unlock()
 }
 
+// connTuple は接続の 4-tuple を返す (受信視点: local=宛先, remote=送信元)。
+func connTuple(c *Conn) fourTuple {
+	return fourTuple{c.local.IP, c.local.Port, c.remote.IP, c.remote.Port}
+}
+
+// reap は CLOSED 接続を connTable と Tick 集合から外す。Conn ロックの外から呼ぶこと
+// (ロック順 ct.mu → c.mu を守るため。Conn ロック内から呼ぶと逆順でデッドロック)。
+// table から消すのは渡された c がまだ占有している場合だけ (新 incarnation の取り違え防止)。
+func (s *Stack) reap(c *Conn, tp fourTuple) {
+	s.table.removeIf(tp, c)
+	s.mu.Lock()
+	delete(s.conns, c)
+	s.mu.Unlock()
+	// delivered は demux goroutine 専用なのでここでは触らない (tickLoop からも呼ばれる)。
+	// 残骸エントリはポインタキーで Conn の GC とともに無害化する。
+}
+
+// reapClosed は Tick 集合の中で CLOSED に達した接続を回収する。tickLoop から
+// Tick 後に呼ぶ。State() は c.mu を取るが、ここでは c.mu を保持していないので
+// 続く reap (ct.mu) と合わせてロック順 ct.mu → c.mu を破らない。
+func (s *Stack) reapClosed() {
+	s.mu.Lock()
+	cs := make([]*Conn, 0, len(s.conns))
+	for c := range s.conns {
+		cs = append(cs, c)
+	}
+	s.mu.Unlock()
+	for _, c := range cs {
+		if c.State() == Closed {
+			s.reap(c, connTuple(c))
+		}
+	}
+}
+
 // Dial は能動オープン。Conn を connTable に test-and-set で登録し ActiveOpen する。
 // 既存 4-tuple が非 TIME-WAIT で占有していればそれを返す (二重 OPEN を作らない)。
 func (s *Stack) Dial(local, remote Endpoint, iss uint32) *Conn {
 	tp := fourTuple{local.IP, local.Port, remote.IP, remote.Port}
-	c, created := s.table.insertIfAbsent(tp, func() *Conn {
-		return NewConn(s.link, s.clock, local, remote)
+	c, created := s.table.insertIfAbsent(tp, func(_ *Conn) *Conn {
+		nc := NewConn(s.link, s.clock, local, remote)
+		nc.ActiveOpen(iss) // テーブルに入る前に SYN-SENT へ。Closed 残骸として reap されない。
+		return nc
 	})
 	if created {
 		s.track(c)
-		c.ActiveOpen(iss)
 	}
 	return c
 }
@@ -78,7 +113,7 @@ func (s *Stack) Dial(local, remote Endpoint, iss uint32) *Conn {
 func (s *Stack) Listen(local Endpoint) *Listener {
 	accept := make(chan *Conn, 16)
 	s.table.addListener(local, accept)
-	return &Listener{stack: s, local: local, accept: accept}
+	return &Listener{stack: s, local: local, accept: accept, done: make(chan struct{})}
 }
 
 // recvLoop は link から 1 read = 1 IP パケットを読み demux する。
@@ -112,6 +147,7 @@ func (s *Stack) tickLoop() {
 			for _, c := range cs {
 				c.Tick()
 			}
+			s.reapClosed() // Tick で CLOSED に達した死接続を回収する。
 		}
 	}
 }
@@ -123,7 +159,10 @@ func (s *Stack) demux(pkt []byte) {
 	if err != nil || ip.Protocol != 6 { // 6 = TCP
 		return
 	}
-	segment := pkt[int(ip.IHL)*4:]
+	segment, ok := tcpSegment(ip, pkt)
+	if !ok {
+		return // TotalLength がバッファと矛盾するパケットは破棄。
+	}
 	if TCPChecksum(ip.SrcAddr, ip.DstAddr, segment) != 0 {
 		return // チェックサム不一致は破棄。
 	}
@@ -139,8 +178,12 @@ func (s *Stack) demux(pkt []byte) {
 	// 1. 完全一致 TCB → そこへ dispatch。
 	//    例外: TIME-WAIT への新 SYN は新 incarnation を許す (RFC 9293 §3.10.7.4,
 	//    MAY-2)。LISTEN 派生へ落とし、insertIfAbsent が TIME-WAIT を置換する。
+	//    CLOSED 残骸は完全一致を奪わせず回収し、LISTEN 再照合へ落とす (4-tuple 再利用)。
 	if c := s.table.lookup(tp); c != nil {
-		if !(h.Flags.Has(FlagSYN) && c.State() == TimeWait) {
+		st := c.State()
+		if st == Closed {
+			s.reap(c, tp) // CLOSED 残骸を回収 (Conn ロック外、ct.mu→s.mu の順)
+		} else if !(h.Flags.Has(FlagSYN) && st == TimeWait) {
 			c.onSegment(h, payload)
 			s.maybeDeliver(c)
 			return
@@ -177,8 +220,13 @@ func (s *Stack) demuxListen(le *listenEntry, ip IPv4Header, h TCPHeader, payload
 
 	remote := Endpoint{IP: ip.SrcAddr, Port: h.SrcPort}
 	// SYN → 新 TCB 派生。test-and-set で登録し (二重派生を防ぐ)、LISTEN 自身は残す。
-	c, created := s.table.insertIfAbsent(tp, func() *Conn {
+	c, created := s.table.insertIfAbsent(tp, func(replaced *Conn) *Conn {
 		nc := NewConn(s.link, s.clock, le.local, remote)
+		// TIME-WAIT / CLOSED を置換するとき、新 ISS を旧 incarnation の max seq より
+		// 大きく採る (RFC 9293 §3.10.7.4。旧セグメントとの seq 衝突を避ける)。
+		if replaced != nil {
+			nc.tcb.snd.iss = replaced.maxSentSeq() + issGap
+		}
 		nc.PassiveOpen() // LISTEN へ。続く onSegment(SYN) で SYN-RECEIVED へ派生。
 		return nc
 	})
@@ -231,18 +279,27 @@ type Listener struct {
 	stack  *Stack
 	local  Endpoint
 	accept chan *Conn
+	// done は Close で閉じる停止シグナル。accept チャネル自体は demux が並行送信
+	// しうるため閉じない (閉じたチャネルへの送信は select default でも panic する)。
+	done chan struct{}
+	once sync.Once
 }
 
-// Accept は確立した派生接続を 1 つ返す (ブロッキング)。Listener が閉じたら nil。
+// Accept は確立した派生接続を 1 つ返す (ブロッキング)。Listener を Close したら nil。
 func (l *Listener) Accept() *Conn {
-	c, ok := <-l.accept
-	if !ok {
+	select {
+	case c := <-l.accept:
+		return c
+	case <-l.done:
 		return nil
 	}
-	return c
 }
 
-// Close は LISTEN エントリを外す。既に確立した派生接続は閉じない。
+// Close は LISTEN エントリを外し、待機中の Accept を解除する。冪等。
+// 既に確立した派生接続は閉じない。
 func (l *Listener) Close() {
-	l.stack.table.removeListener(l.local)
+	l.once.Do(func() {
+		l.stack.table.removeListener(l.local)
+		close(l.done)
+	})
 }

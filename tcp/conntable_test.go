@@ -21,11 +21,11 @@ func TestInsertIfAbsentReturnsExisting(t *testing.T) {
 	ct := newConnTable()
 	tp := tupleFor(lbServer, lbClient)
 	calls := 0
-	c1, created1 := ct.insertIfAbsent(tp, func() *Conn { calls++; return &Conn{} })
+	c1, created1 := ct.insertIfAbsent(tp, func(_ *Conn) *Conn { calls++; return &Conn{} })
 	if !created1 {
 		t.Fatal("初回 insert は created=true のはず")
 	}
-	c2, created2 := ct.insertIfAbsent(tp, func() *Conn { calls++; return &Conn{} })
+	c2, created2 := ct.insertIfAbsent(tp, func(_ *Conn) *Conn { calls++; return &Conn{} })
 	if created2 {
 		t.Fatal("2 回目 insert は created=false のはず")
 	}
@@ -47,7 +47,7 @@ func TestInsertIfAbsentConcurrentSingleConn(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, ok := ct.insertIfAbsent(tp, func() *Conn { return &Conn{} }); ok {
+			if _, ok := ct.insertIfAbsent(tp, func(_ *Conn) *Conn { return &Conn{} }); ok {
 				atomic.AddInt64(&created, 1)
 			}
 		}()
@@ -62,7 +62,7 @@ func TestInsertIfAbsentConcurrentSingleConn(t *testing.T) {
 func TestLookupExactMatch(t *testing.T) {
 	ct := newConnTable()
 	tp := tupleFor(lbServer, lbClient)
-	want, _ := ct.insertIfAbsent(tp, func() *Conn { return &Conn{} })
+	want, _ := ct.insertIfAbsent(tp, func(_ *Conn) *Conn { return &Conn{} })
 	if got := ct.lookup(tp); got != want {
 		t.Fatal("lookup が一致 Conn を返さない")
 	}
@@ -76,9 +76,9 @@ func TestLookupExactMatch(t *testing.T) {
 func TestRemoveAllowsReinsert(t *testing.T) {
 	ct := newConnTable()
 	tp := tupleFor(lbServer, lbClient)
-	ct.insertIfAbsent(tp, func() *Conn { return &Conn{} })
+	ct.insertIfAbsent(tp, func(_ *Conn) *Conn { return &Conn{} })
 	ct.remove(tp)
-	if _, ok := ct.insertIfAbsent(tp, func() *Conn { return &Conn{} }); !ok {
+	if _, ok := ct.insertIfAbsent(tp, func(_ *Conn) *Conn { return &Conn{} }); !ok {
 		t.Fatal("remove 後は再 insert できるはず")
 	}
 }
@@ -87,8 +87,8 @@ func TestRemoveAllowsReinsert(t *testing.T) {
 func TestInsertIfAbsentReplacesTimeWait(t *testing.T) {
 	ct := newConnTable()
 	tp := tupleFor(lbServer, lbClient)
-	old, _ := ct.insertIfAbsent(tp, func() *Conn { c := &Conn{}; c.tcb.state = TimeWait; return c })
-	fresh, created := ct.insertIfAbsent(tp, func() *Conn { return &Conn{} })
+	old, _ := ct.insertIfAbsent(tp, func(_ *Conn) *Conn { c := &Conn{}; c.tcb.state = TimeWait; return c })
+	fresh, created := ct.insertIfAbsent(tp, func(_ *Conn) *Conn { return &Conn{} })
 	if !created {
 		t.Fatal("TIME-WAIT は新 incarnation を許す (created=true)")
 	}

@@ -17,8 +17,8 @@ func (c *Conn) SetRcvBuffer(total uint32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.tcb.rcvBuffTotal = total
-	if uint32(c.tcb.rcv.wnd) > total {
-		c.tcb.rcv.wnd = uint16(total)
+	if c.tcb.rcv.wnd > total {
+		c.tcb.rcv.wnd = total
 	}
 }
 
@@ -204,8 +204,8 @@ func (c *Conn) acceptText(h TCPHeader, payload []byte) {
 // consumeRcvWindow は RCV.NXT が n 前進したぶん RCV.WND を減らし右窓端を固定する。
 // 窓未満まで減ったら 0 で飽和させる (右窓端は RCV.NXT を下回らない)。
 func (c *Conn) consumeRcvWindow(n uint32) {
-	if uint32(c.tcb.rcv.wnd) > n {
-		c.tcb.rcv.wnd -= uint16(n)
+	if c.tcb.rcv.wnd > n {
+		c.tcb.rcv.wnd -= n
 	} else {
 		c.tcb.rcv.wnd = 0
 	}
@@ -225,7 +225,7 @@ func (c *Conn) trimToWindow(seq uint32, payload []byte) segFragment {
 		seq = c.tcb.rcv.nxt
 	}
 	// 右トリム: 窓の右端 RCV.NXT+RCV.WND を超えるぶんを捨てる。
-	winEnd := c.tcb.rcv.nxt + uint32(c.tcb.rcv.wnd)
+	winEnd := c.tcb.rcv.nxt + c.tcb.rcv.wnd
 	if SeqGT(end, winEnd) {
 		over := end - winEnd
 		if over >= uint32(len(payload)) {

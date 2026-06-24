@@ -81,6 +81,48 @@ func TestRcvWindowRightEdgeMonotonic(t *testing.T) {
 	}
 }
 
+// 受信窓が 64KB を超えても (window scale 折衝済み) 壊れない。
+// 内部窓は実バイトを保持し、広告窓は >> rcvWindShift で 16bit に収めて送る。
+func TestLargeRcvBufferWithWindowScale(t *testing.T) {
+	c, peer, _ := newTestConn(t)
+	c.SetRcvBuffer(200000) // 65535 超: uint16 だと wrap して窓が壊れる
+	c.ActiveOpen(1000)
+	drainPeer(t, peer) // SYN を読み捨て
+	// SYN-ACK に WScale=7 を載せて折衝を成立させる。
+	o := TCPOptions{HasWScale: true, WindowScale: 7}
+	c.onSegment(TCPHeader{Flags: Flags(FlagSYN | FlagACK), SeqNum: 5000, AckNum: 1001, Window: 65535, Options: o.Marshal()}, nil)
+	if c.State() != Established {
+		t.Fatalf("握手が成立していない: %v", c.State())
+	}
+
+	// 内部受信窓は実バイト (200000) を保持する。
+	c.mu.Lock()
+	internal := c.tcb.rcv.wnd
+	shift := c.tcb.rcvWindShift
+	c.mu.Unlock()
+	if internal != 200000 {
+		t.Fatalf("内部受信窓が壊れている: got %d want 200000", internal)
+	}
+	if shift != 7 {
+		t.Fatalf("window scale が折衝されていない: shift=%d", shift)
+	}
+
+	// 握手 ACK の広告窓は 200000>>7 = 1562 で 16bit に収まる。
+	ack := expectFlags(t, peer, Flags(FlagACK))
+	if ack.Window != uint16(200000>>7) {
+		t.Fatalf("広告窓が壊れている: got %d want %d", ack.Window, uint16(200000>>7))
+	}
+
+	// 65535 を超える seq 範囲のデータを受信できる (窓が実バイトを許す)。
+	big := make([]byte, 70000)
+	c.onSegment(TCPHeader{Flags: Flags(FlagACK), SeqNum: 5001, AckNum: 1001, Window: 65535}, big)
+	buf := make([]byte, 70000)
+	n, _ := c.Recv(buf)
+	if n != 70000 {
+		t.Fatalf("65535 超のデータが受信できない: got %d want 70000", n)
+	}
+}
+
 // 送信側 Nagle: idle 開始の sub-MSS は即送る。
 func TestSendIdleSubMSSSentImmediately(t *testing.T) {
 	c, peer, _ := establishedConn(t, maxWindow)

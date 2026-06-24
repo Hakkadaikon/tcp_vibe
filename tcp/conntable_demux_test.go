@@ -119,7 +119,7 @@ func TestDemuxTimeWaitReplacedBySyn(t *testing.T) {
 	remote := Endpoint{IP: dxRemote, Port: 1234}
 	local := Endpoint{IP: dxLocal, Port: 9000}
 	tp := fourTuple{local.IP, local.Port, remote.IP, remote.Port}
-	old, _ := s.table.insertIfAbsent(tp, func() *Conn {
+	old, _ := s.table.insertIfAbsent(tp, func(_ *Conn) *Conn {
 		c := NewConn(stackLink, fc.Now, local, remote)
 		c.tcb.state = TimeWait
 		return c
@@ -135,6 +135,106 @@ func TestDemuxTimeWaitReplacedBySyn(t *testing.T) {
 	// テーブルは新 Conn を指し、TIME-WAIT の古い Conn ではない (二重にならない)。
 	if got := s.table.lookup(tp); got == old {
 		t.Fatal("TIME-WAIT が置換されず古い Conn のまま")
+	}
+}
+
+// CLOSED まで進めた接続は connTable と Tick 集合から回収され、同じ 4-tuple で
+// 新規 SYN が LISTEN 派生して握手できる (4-tuple 再利用可能)。
+func TestClosedConnReapedAndTupleReusable(t *testing.T) {
+	stackLink, peer := NewPipeLink()
+	fc := newFakeClock()
+	s := NewStack(stackLink, fc.Now)
+	t.Cleanup(s.Close)
+	ln := s.Listen(Endpoint{IP: dxLocal, Port: 9000})
+	t.Cleanup(ln.Close)
+
+	remote := Endpoint{IP: dxRemote, Port: 1234}
+	local := Endpoint{IP: dxLocal, Port: 9000}
+	tp := fourTuple{local.IP, local.Port, remote.IP, remote.Port}
+
+	// CLOSED な残骸をテーブルと Tick 集合に置く (LAST-ACK 完了後などの状態)。
+	dead, _ := s.table.insertIfAbsent(tp, func(_ *Conn) *Conn {
+		c := NewConn(stackLink, fc.Now, local, remote)
+		c.tcb.state = Closed
+		return c
+	})
+	s.track(dead)
+
+	// 同じ 4-tuple へ新規 SYN → CLOSED 残骸は回収され LISTEN 派生で握手が始まる。
+	pkt := buildSeg(dxRemote, dxLocal, TCPHeader{SrcPort: 1234, DstPort: 9000, Flags: Flags(FlagSYN), SeqNum: 8000, DataOffset: 5}, nil)
+	_ = peer.WritePacket(pkt)
+
+	if h := readSegWithin(t, peer, time.Second); h == nil || !h.Flags.Has(FlagSYN) || !h.Flags.Has(FlagACK) {
+		t.Fatalf("再利用した 4-tuple で SYN-ACK が返らない: %v", h)
+	}
+	// テーブルは CLOSED 残骸でなく新 incarnation を指す。
+	if got := s.table.lookup(tp); got == dead {
+		t.Fatal("CLOSED 残骸が回収されていない (古い Conn のまま)")
+	}
+}
+
+// CLOSED へ達した接続は Tick 集合から消える (tickLoop が死接続を叩き続けない)。
+func TestClosedConnRemovedFromTickSet(t *testing.T) {
+	stackLink, _ := NewPipeLink()
+	fc := newFakeClock()
+	s := NewStack(stackLink, fc.Now)
+	t.Cleanup(s.Close)
+
+	remote := Endpoint{IP: dxRemote, Port: 5555}
+	local := Endpoint{IP: dxLocal, Port: 9000}
+	tp := fourTuple{local.IP, local.Port, remote.IP, remote.Port}
+	dead, _ := s.table.insertIfAbsent(tp, func(_ *Conn) *Conn {
+		c := NewConn(stackLink, fc.Now, local, remote)
+		c.tcb.state = Closed
+		return c
+	})
+	s.track(dead)
+
+	// reap 経路 (tickLoop の CLOSED 検出) を直接叩く。
+	s.reapClosed()
+
+	s.mu.Lock()
+	_, present := s.conns[dead]
+	s.mu.Unlock()
+	if present {
+		t.Fatal("CLOSED 接続が Tick 集合に残っている")
+	}
+	if s.table.lookup(tp) != nil {
+		t.Fatal("CLOSED 接続が connTable に残っている")
+	}
+}
+
+// TIME-WAIT の 4-tuple へ新 SYN → 派生接続の ISS が旧接続の max seq より大きい。
+func TestTimeWaitReplacementIssExceedsOldMaxSeq(t *testing.T) {
+	stackLink, peer := NewPipeLink()
+	fc := newFakeClock()
+	s := NewStack(stackLink, fc.Now)
+	t.Cleanup(s.Close)
+	ln := s.Listen(Endpoint{IP: dxLocal, Port: 9000})
+	t.Cleanup(ln.Close)
+
+	remote := Endpoint{IP: dxRemote, Port: 1234}
+	local := Endpoint{IP: dxLocal, Port: 9000}
+	tp := fourTuple{local.IP, local.Port, remote.IP, remote.Port}
+	const oldMax = 50000
+	s.table.insertIfAbsent(tp, func(_ *Conn) *Conn {
+		c := NewConn(stackLink, fc.Now, local, remote)
+		c.tcb.state = TimeWait
+		c.tcb.snd.nxt = oldMax // 旧 incarnation が送った最大 seq
+		c.tcb.snd.una = oldMax
+		return c
+	})
+
+	pkt := buildSeg(dxRemote, dxLocal, TCPHeader{SrcPort: 1234, DstPort: 9000, Flags: Flags(FlagSYN), SeqNum: 8000, DataOffset: 5}, nil)
+	_ = peer.WritePacket(pkt)
+
+	h := readSegWithin(t, peer, time.Second)
+	if h == nil || !h.Flags.Has(FlagSYN) || !h.Flags.Has(FlagACK) {
+		t.Fatalf("新 incarnation の SYN-ACK が返らない: %v", h)
+	}
+	// SYN-ACK の seq = 新 ISS。旧 max seq より大きいこと。
+	if !SeqGT(h.SeqNum, oldMax) {
+		t.Fatalf("新 ISS が旧 max seq を上回らない: iss=%d oldMax=%d", h.SeqNum, oldMax)
 	}
 }
 
@@ -170,7 +270,7 @@ func TestDemuxExactMatchBeatsListen(t *testing.T) {
 	remote := Endpoint{IP: dxRemote, Port: 1234}
 	local := Endpoint{IP: dxLocal, Port: 9000}
 	tp := fourTuple{local.IP, local.Port, remote.IP, remote.Port}
-	existing, _ := s.table.insertIfAbsent(tp, func() *Conn {
+	existing, _ := s.table.insertIfAbsent(tp, func(_ *Conn) *Conn {
 		c := NewConn(stackLink, fc.Now, local, remote)
 		c.tcb.state = Established
 		c.tcb.rcv.nxt = 5000

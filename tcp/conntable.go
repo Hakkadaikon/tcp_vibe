@@ -44,18 +44,24 @@ func newConnTable() *connTable {
 
 // insertIfAbsent は test-and-set。すべて mutex 下で不可分に行う:
 //   - 非 TIME-WAIT な占有があれば既存を返し created=false (二重 TCB を作らない)
-//   - 空、または TIME-WAIT 占有 (新 incarnation 可) なら mkConn() で作って入れ created=true
-//     (TIME-WAIT は delete-then-insert を不可分に行い、残したまま追加しない)
-func (ct *connTable) insertIfAbsent(tp fourTuple, mkConn func() *Conn) (*Conn, bool) {
+//   - 空、または TIME-WAIT 占有 (新 incarnation 可) なら mkConn で作って入れ created=true。
+//     置換した旧 TIME-WAIT 接続を mkConn に渡し、新 ISS を旧 max seq より大きく採れる
+//     ようにする (RFC 9293 §3.10.7.4)。
+//
+// ロック順は ct.mu → c.mu (existing.State() が c.mu を取る)。逆順 (Conn から ct.mu)
+// にするとデッドロックするため、reap は必ず Conn ロック外で行う。CLOSED 残骸は demux/
+// tickLoop が reap で先に削除してからここを通すので、ここで特別扱いはしない。
+func (ct *connTable) insertIfAbsent(tp fourTuple, mkConn func(replaced *Conn) *Conn) (*Conn, bool) {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
+	var replaced *Conn
 	if existing, ok := ct.conns[tp]; ok {
 		if existing.State() != TimeWait {
 			return existing, false // 非 TIME-WAIT 占有: そのまま返す
 		}
-		// TIME-WAIT: 新 incarnation で置換 (全単射を保つため残さない)。
+		replaced = existing // TIME-WAIT: 新 incarnation で置換する
 	}
-	c := mkConn()
+	c := mkConn(replaced)
 	ct.conns[tp] = c
 	return c, true
 }
@@ -72,6 +78,16 @@ func (ct *connTable) remove(tp fourTuple) {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 	delete(ct.conns, tp)
+}
+
+// removeIf は 4-tuple のエントリが want と同一のときだけ消す。CLOSED 残骸の回収中に
+// 既に新 incarnation へ置換されていたら消さない (取り違え防止)。
+func (ct *connTable) removeIf(tp fourTuple, want *Conn) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	if ct.conns[tp] == want {
+		delete(ct.conns, tp)
+	}
 }
 
 // addListener は LISTEN エントリを登録する。

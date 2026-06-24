@@ -78,19 +78,15 @@ func (t *TCB) effSndMSS() uint32 {
 // rcvBuffCap は受信バッファ総容量 (RCV.BUFF)。未設定なら defaultRcvWindow。
 func (t *TCB) rcvBuffCap() uint32 {
 	if t.rcvBuffTotal == 0 {
-		return uint32(defaultRcvWindow)
+		return defaultRcvWindow
 	}
 	return t.rcvBuffTotal
 }
 
-// initialRcvWindow は Open 時に広告する初期受信窓。rcvBuffTotal が設定されていれば
-// それを (uint16 上限で) 使い、無ければ defaultRcvWindow。
-func (t *TCB) initialRcvWindow() uint16 {
-	total := t.rcvBuffCap()
-	if total > uint32(maxWindow) {
-		return maxWindow
-	}
-	return uint16(total)
+// initialRcvWindow は Open 時の内部受信窓 (実バイト)。rcvBuffTotal が設定されていれば
+// それを、無ければ defaultRcvWindow。出力時に rcvWindShift で 16bit へ収める。
+func (t *TCB) initialRcvWindow() uint32 {
+	return t.rcvBuffCap()
 }
 
 // --- 送信側タイマ (persist / override) の arm・満了 ---
@@ -196,6 +192,6 @@ func (c *Conn) fireDelayedAck() { c.sendDelayedAck() }
 //   - Recv で読むと rcvBuf が減り avail が増え、ここで RCV.WND が増えて右窓端が前進
 func (c *Conn) recomputeRcvWindow() {
 	used := uint32(len(c.tcb.rcvBuf))
-	w := advertiseWindow(c.tcb.rcvBuffCap(), used, uint32(c.tcb.rcv.wnd), c.tcb.effSndMSS())
-	c.tcb.rcv.wnd = uint16(w)
+	w := advertiseWindow(c.tcb.rcvBuffCap(), used, c.tcb.rcv.wnd, c.tcb.effSndMSS())
+	c.tcb.rcv.wnd = w
 }

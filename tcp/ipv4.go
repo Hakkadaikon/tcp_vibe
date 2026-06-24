@@ -67,3 +67,16 @@ func ParseIPv4Header(b []byte) (IPv4Header, error) {
 	copy(h.DstAddr[:], b[16:20])
 	return h, nil
 }
+
+// tcpSegment は IPv4 パケット pkt から TCP セグメント部 (IP ヘッダ後〜TotalLength)
+// を切り出す。TotalLength で切り詰めることで、Link が渡す末尾パディングや連結バイトが
+// TCP セグメントへ混入するのを防ぐ (checksum 誤判定・過大ペイロードの回避)。
+// TotalLength が妥当でない (ヘッダ長未満 or 実バッファ超) なら ok=false。
+func tcpSegment(h IPv4Header, pkt []byte) ([]byte, bool) {
+	hdrLen := int(h.IHL) * 4
+	total := int(h.TotalLength)
+	if total < hdrLen || total > len(pkt) {
+		return nil, false
+	}
+	return pkt[hdrLen:total], true
+}

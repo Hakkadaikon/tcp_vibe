@@ -121,7 +121,11 @@ func (r *receiver) dispatch(pkt []byte) {
 		debugf("recv: 破棄 (非TCP proto=%d)", ip.Protocol)
 		return
 	}
-	segment := pkt[int(ip.IHL)*4:]
+	segment, ok := tcpSegment(ip, pkt)
+	if !ok {
+		debugf("recv: 破棄 (IPv4 TotalLength 不正): len=%d total=%d", len(pkt), ip.TotalLength)
+		return // TotalLength がバッファと矛盾するパケットは破棄。
+	}
 	// TCP チェックサム検証 (擬似ヘッダ込み)。不一致なら状態機械に届けない。
 	// 正しいセグメントは checksum 欄込みの ones'-comp sum が 0 になる。
 	if sum := TCPChecksum(ip.SrcAddr, ip.DstAddr, segment); sum != 0 {

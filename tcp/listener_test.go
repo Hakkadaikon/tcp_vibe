@@ -70,6 +70,35 @@ func TestStackLoopbackMultipleConns(t *testing.T) {
 	}
 }
 
+// Accept で待機中に Close すると Accept が nil を返してブロックを抜ける。
+// 二重 Close でも panic しない。
+func TestListenerCloseUnblocksAccept(t *testing.T) {
+	_, bLink := NewPipeLink()
+	fc := newFakeClock()
+	server := NewStack(bLink, fc.Now)
+	t.Cleanup(server.Close)
+
+	ln := server.Listen(Endpoint{IP: [4]byte{10, 0, 0, 2}, Port: 9000})
+
+	got := make(chan *Conn, 1)
+	go func() { got <- ln.Accept() }()
+
+	// Accept が待機に入るのを少し待ってから Close する。
+	time.Sleep(20 * time.Millisecond)
+	ln.Close()
+
+	select {
+	case c := <-got:
+		if c != nil {
+			t.Fatalf("Close 後の Accept は nil のはず: got %v", c)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close しても Accept がブロックから戻らない")
+	}
+
+	ln.Close() // 二重 Close で panic しないこと。
+}
+
 // LISTEN が派生後も LISTEN のまま残ることを、別 remote から順次 SYN を送って確認する。
 func TestListenerStaysListening(t *testing.T) {
 	aLink, bLink := NewPipeLink()

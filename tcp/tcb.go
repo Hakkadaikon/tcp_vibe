@@ -80,7 +80,7 @@ type sndVars struct {
 // rcvVars は受信側状態変数 (RFC 9293 §3.3.1)。
 type rcvVars struct {
 	nxt uint32 // 次に受け取りたい seq
-	wnd uint16 // 受信窓
+	wnd uint32 // 受信窓 (実バイト)。window scale 後は 65535 を超え最大 2^30 まで取りうる
 	irs uint32 // 相手の初期受信 seq
 }
 
