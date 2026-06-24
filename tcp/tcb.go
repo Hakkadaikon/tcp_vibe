@@ -138,6 +138,9 @@ type TCB struct {
 	// oooSegs は窓内だが順番待ちの保持セグメント (seq 昇順)。RCV.NXT が追いつくと
 	// rcvBuf へ取り込んで RCV.NXT を前進させる (out-of-order 再組立て)。
 	oooSegs []segFragment
+	// lastOooSeq は直近に挿入した先行セグメントの seq。SACK の先頭ブロックを
+	// 「最新受信を含む連続領域」にするための目印 (RFC 2018 §4)。
+	lastOooSeq uint32
 
 	// peerFinSeq は相手 FIN が占める seq。peerFin が true のとき有効。
 	// この seq まで読み切ったら Recv は EOF を返す。
@@ -192,6 +195,13 @@ type TCB struct {
 	delAckDeadline time.Time
 	delAckArmed    bool
 	delAckCount    int
+
+	// --- keepalive (RFC 1122 §4.2.3.6 / RFC 9293 §3.8.4) ---
+	// 既定 OFF (keepaliveEnabled=false が MUST)。SetKeepAlive で接続ごとに有効化する。
+	keepaliveEnabled bool
+	keepaliveIdle    time.Duration // この時間 idle が続くと probe を送る
+	lastRecvTime     time.Time     // 直近にセグメントを受信した時刻 (idle 起点)
+	keepaliveProbes  int           // 未応答 probe の連続回数。受信でリセット
 }
 
 // segFragment は受信した連続バイト片 (seq とデータ)。out-of-order 再組立て用。
@@ -268,4 +278,14 @@ const (
 	overrideTimeout = 200 * time.Millisecond
 	// delAckTimeout は delayed ACK の遅延上限。RFC 1122 §4.2.3.2 の 0.5 秒未満必須。
 	delAckTimeout = 200 * time.Millisecond
+)
+
+// keepalive の定数 seam (RFC 1122 §4.2.3.6、調整可)。
+const (
+	// defaultKeepaliveIdle は SetKeepAlive で idle=0 を渡したときの既定 idle。
+	// RFC の MUST は「2 時間以上、設定可」。
+	defaultKeepaliveIdle = 2 * time.Hour
+	// keepaliveMaxProbes は無応答 probe をこの回数まで許し、超えたら接続を閉じる
+	// (RFC 1122 は単一無応答での切断を禁止。複数 probe での切断は実装定義)。
+	keepaliveMaxProbes = 9
 )

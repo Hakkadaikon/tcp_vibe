@@ -241,6 +241,7 @@ func (c *Conn) trimToWindow(seq uint32, payload []byte) segFragment {
 // insertOoo は先行セグメントを oooSegs に seq 昇順で挿入する。
 // 既存と重複する部分は drainOoo 側の trim で解消するため、ここは単純挿入でよい。
 func (c *Conn) insertOoo(frag segFragment) {
+	c.tcb.lastOooSeq = frag.seq // SACK 先頭ブロックの目印 (最新受信)。
 	i := 0
 	for i < len(c.tcb.oooSegs) && SeqLT(c.tcb.oooSegs[i].seq, frag.seq) {
 		i++

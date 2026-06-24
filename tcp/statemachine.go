@@ -214,6 +214,7 @@ func (c *Conn) Tick() {
 	}
 	c.checkRetransmit()
 	c.checkFlowTimers()
+	c.checkKeepAlive()
 }
 
 // checkFlowTimers は persist / override / delayed-ACK の満了を判定し処理する。
@@ -452,7 +453,35 @@ func (c *Conn) allowChallengeAck() bool {
 func (c *Conn) sendAck() {
 	c.tcb.delAckArmed = false
 	c.tcb.delAckCount = 0
+	// 受信に穴があり SACK 折衝済みなら ACK に SACK ブロックを載せる (RFC 2018)。
+	// TS も載せるため opts を明示構築し、writeSegOpts の TS 自動付与には委ねない。
+	if opts := c.ackOptions(); opts != nil {
+		c.writeSegOpts(Flags(FlagACK), c.tcb.snd.nxt, c.tcb.rcv.nxt, nil, opts)
+		return
+	}
 	c.send(Flags(FlagACK), c.tcb.snd.nxt, c.tcb.rcv.nxt)
+}
+
+// ackOptions は ACK に載せるオプション領域を組む。SACK を載せるときだけ非 nil を
+// 返し、TS 折衝済みなら TS も併せて載せる (option 領域 40 バイトに収める)。
+// SACK が不要 (穴なし or 未折衝) なら nil を返し、TS 自動付与を writeSegOpts に委ねる。
+func (c *Conn) ackOptions() []byte {
+	if !c.tcb.sackOK || len(c.tcb.oooSegs) == 0 {
+		return nil
+	}
+	o := TCPOptions{}
+	maxBlocks := maxSackBlocks
+	if c.tcb.tsOK {
+		o.HasTimestamp = true
+		o.TSVal = c.tcb.tsNow()
+		o.TSecr = c.tcb.tsRecent
+		maxBlocks-- // TS(10 バイト) を引いた残りに収まるブロック数 (RFC 2018 §3)。
+	}
+	o.SACKBlocks = c.sackBlocks(maxBlocks)
+	if len(o.SACKBlocks) == 0 {
+		return nil
+	}
+	return o.Marshal()
 }
 
 // sendRst は RST を送る。CLOSED や LISTEN での不正セグメント応答に使う。
@@ -501,6 +530,10 @@ func (t *TCB) acceptable(h TCPHeader, payload []byte) bool {
 func (c *Conn) onSegment(h TCPHeader, payload []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// 受信があったので keepalive の idle 起点を進め、未応答 probe をリセットする。
+	c.tcb.lastRecvTime = c.tcb.clock()
+	c.tcb.keepaliveProbes = 0
 
 	switch c.tcb.state {
 	case Closed:
