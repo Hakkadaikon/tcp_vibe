@@ -138,7 +138,7 @@ func (c *Conn) ActiveOpen(iss uint32) {
 	c.tcb.snd.iss = iss
 	c.tcb.snd.una = iss
 	c.tcb.snd.nxt = iss + 1
-	c.tcb.rcv.wnd = defaultRcvWindow
+	c.tcb.rcv.wnd = c.tcb.initialRcvWindow()
 	c.tcb.state = SynSent
 	c.sendSyn(Flags(FlagSYN), iss, 0)
 }
@@ -159,7 +159,7 @@ func (c *Conn) sendSyn(flags Flags, seq, ack uint32) {
 func (c *Conn) PassiveOpen() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.tcb.rcv.wnd = defaultRcvWindow
+	c.tcb.rcv.wnd = c.tcb.initialRcvWindow()
 	c.tcb.state = Listen
 }
 
@@ -191,6 +191,22 @@ func (c *Conn) Tick() {
 		c.tcb.state = Closed
 	}
 	c.checkRetransmit()
+	c.checkFlowTimers()
+}
+
+// checkFlowTimers は persist / override / delayed-ACK の満了を判定し処理する。
+// 満了判定は clock seam の現在時刻と各 deadline の比較で決定論的に行う。
+func (c *Conn) checkFlowTimers() {
+	now := c.tcb.clock()
+	if c.tcb.persistArmed && !now.Before(c.tcb.persistDeadline) {
+		c.probePersist()
+	}
+	if c.tcb.overrideArmed && !now.Before(c.tcb.overrideDeadline) {
+		c.fireOverride()
+	}
+	if c.tcb.delAckArmed && !now.Before(c.tcb.delAckDeadline) {
+		c.fireDelayedAck()
+	}
 }
 
 // checkRetransmit は再送キュー先頭の RTO 満了を判定し、満了なら再送する。
@@ -404,7 +420,11 @@ func (c *Conn) allowChallengeAck() bool {
 }
 
 // sendAck は素の ACK を返す (受理不可セグメントへの応答・FIN への ACK 等)。
+// 送る ACK は現 RCV.NXT を広告するので、溜まっていた delayed ACK もこれで満たされる。
+// 取りこぼし防止に delayed ACK の状態をここでクリアする。
 func (c *Conn) sendAck() {
+	c.tcb.delAckArmed = false
+	c.tcb.delAckCount = 0
 	c.send(Flags(FlagACK), c.tcb.snd.nxt, c.tcb.rcv.nxt)
 }
 
@@ -783,6 +803,9 @@ func (c *Conn) updateSendWindow(h TCPHeader) {
 		c.tcb.snd.wnd = w
 		c.tcb.snd.wl1 = h.SeqNum
 		c.tcb.snd.wl2 = h.AckNum
+		if w > 0 {
+			c.disarmPersist() // 窓が開いた: probe を止め backoff をリセット
+		}
 	}
 	if w > c.tcb.maxSndWnd {
 		c.tcb.maxSndWnd = w

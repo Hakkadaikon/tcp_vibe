@@ -11,6 +11,25 @@ var ErrNotEstablished = errors.New("tcp: connection not established")
 // ErrConnClosed は閉じ方向 (FIN 送出後や CLOSED) への Send で返る。
 var ErrConnClosed = errors.New("tcp: connection closing or closed")
 
+// SetRcvBuffer は受信バッファ総容量 (RCV.BUFF) を設定し受信窓もそこへ合わせる。
+// 握手前 (現窓が既定値) に呼ぶ前提。小さくすると受信側 SWS / 窓開閉が観測しやすい。
+func (c *Conn) SetRcvBuffer(total uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tcb.rcvBuffTotal = total
+	if uint32(c.tcb.rcv.wnd) > total {
+		c.tcb.rcv.wnd = uint16(total)
+	}
+}
+
+// SetNoDelay は Nagle アルゴリズムの有効/無効を切り替える (TCP_NODELAY 相当)。
+// true で無効化すると未確認データ中でも sub-MSS を溜めず即送る (RFC 1122 §4.2.3.4)。
+func (c *Conn) SetNoDelay(disable bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tcb.nagleDisabled = disable
+}
+
 // Send はユーザデータを送信バッファに積み、送信窓の余地ぶんを送り出す。
 // 積めたバイト数 (= len(data)) を返す。ESTABLISHED でなければ何もせずエラー。
 // FIN 送出後や CLOSED など送信不能な状態では ErrConnClosed。
@@ -32,46 +51,74 @@ func (c *Conn) Send(data []byte) (int, error) {
 	return len(data), nil
 }
 
-// flushSend は送信窓 (SND.UNA+SND.WND - SND.NXT) と MSS の範囲で、未送信バイトを
+// flushSend は送信側 SWS 回避 + Nagle (RFC 9293 §3.7.4) の判定で、未送信バイトを
 // PSH|ACK セグメントに切り出して送る。送ったぶん SND.NXT を進める。
 // 送信は mutex 保持中に呼ぶこと。
+//
+// 相手窓 0 で未送信ありなら persist タイマを arm し (zero-window probe の起点)、
+// 窓はあるがフル未満で Nagle/SWS により送れないときは override タイマを arm する
+// (詰まりの唯一の活性保証)。送れた / 未送信が尽きたらタイマは解除する。
 func (c *Conn) flushSend() {
+	// 呼び出し開始時に未確認データが無ければ idle。idle 開始の一括送出はこの回で
+	// 出せるデータを端数まで送り切る (RFC 9293 §3.7.4 古典 Nagle: 未確認の小データが
+	// 1 つ出るまで小セグメントを送ってよい)。Nagle が抑えるのは「未確認データが
+	// 既にある状態」から積まれた新規 sub-MSS だけ。
+	idle := c.tcb.snd.nxt == c.tcb.snd.una
 	for {
-		// 送信窓の残余 = SND.UNA + SND.WND - SND.NXT (受信側の広告窓 rwnd)。
-		usable := c.tcb.snd.una + uint32(c.tcb.snd.wnd) - c.tcb.snd.nxt
-		if SeqGT(c.tcb.snd.nxt, c.tcb.snd.una+uint32(c.tcb.snd.wnd)) {
-			usable = 0 // 窓を超えている (SND.WND=0 直後など)
-		}
-		// 輻輳ウィンドウでも絞る: 送信中バイト + 今回送るぶん <= cwnd
-		// (RFC 5681, 送信量 <= min(cwnd, rwnd))。
-		inflight := c.tcb.snd.nxt - c.tcb.snd.una
-		var cwndRoom uint32
-		if c.tcb.cong.cwnd > inflight {
-			cwndRoom = c.tcb.cong.cwnd - inflight
-		}
-		if cwndRoom < usable {
-			usable = cwndRoom
-		}
-		if usable == 0 {
-			return
-		}
-		// sndBuf 中で未送信の開始位置 = SND.NXT - SND.UNA。
 		off := int(c.tcb.snd.nxt - c.tcb.snd.una)
 		if off >= len(c.tcb.sndBuf) {
-			return // 未送信データなし
+			c.disarmOverride() // 未送信なし: 詰まりタイマ不要
+			c.disarmPersist()
+			return
 		}
-		n := len(c.tcb.sndBuf) - off
-		if n > int(usable) {
-			n = int(usable)
+		d := uint32(len(c.tcb.sndBuf) - off)
+		// 相手窓 0 で未送信あり → persist で probe を出し続ける (override は使わない)。
+		if c.tcb.snd.wnd == 0 {
+			c.armPersist()
+			return
 		}
-		if n > defaultMSS {
-			n = defaultMSS
+		usable := c.sendUsable()
+		if !canSend(d, usable, c.tcb.effSndMSS(), c.tcb.maxSndWnd, idle, c.tcb.nagleDisabled) {
+			c.armOverride() // フル未満で詰まった: 満了で sub-MSS を強制送出
+			return
 		}
-		payload := make([]byte, n)
-		copy(payload, c.tcb.sndBuf[off:off+n])
-		c.sendData(Flags(FlagPSH|FlagACK), c.tcb.snd.nxt, c.tcb.rcv.nxt, payload)
-		c.tcb.snd.nxt += uint32(n)
+		c.emitSegment(off, d, usable)
 	}
+}
+
+// sendUsable は今送れるバイト数 = min(rwnd 残余, cwnd 残余)。
+// rwnd 残余 = SND.UNA+SND.WND-SND.NXT、cwnd 残余 = cwnd - 送信中バイト。
+func (c *Conn) sendUsable() uint32 {
+	usable := c.tcb.snd.una + uint32(c.tcb.snd.wnd) - c.tcb.snd.nxt
+	if SeqGT(c.tcb.snd.nxt, c.tcb.snd.una+uint32(c.tcb.snd.wnd)) {
+		usable = 0
+	}
+	inflight := c.tcb.snd.nxt - c.tcb.snd.una
+	var cwndRoom uint32
+	if c.tcb.cong.cwnd > inflight {
+		cwndRoom = c.tcb.cong.cwnd - inflight
+	}
+	if cwndRoom < usable {
+		usable = cwndRoom
+	}
+	return usable
+}
+
+// emitSegment は off から 1 セグメント (min(D, usable, MSS) バイト) を切り出し送出する。
+// 送出できたので詰まりタイマ (override) は解除する。
+func (c *Conn) emitSegment(off int, d, usable uint32) {
+	n := d
+	if n > usable {
+		n = usable
+	}
+	if n > defaultMSS {
+		n = defaultMSS
+	}
+	payload := make([]byte, n)
+	copy(payload, c.tcb.sndBuf[off:off+int(n)])
+	c.sendData(Flags(FlagPSH|FlagACK), c.tcb.snd.nxt, c.tcb.rcv.nxt, payload)
+	c.tcb.snd.nxt += n
+	c.disarmOverride()
 }
 
 // releaseAckedSend は SND.UNA が oldUna から前進したぶんを送信バッファから解放する。
@@ -102,6 +149,14 @@ func (c *Conn) Recv(buf []byte) (int, error) {
 	}
 	n := copy(buf, c.tcb.rcvBuf)
 	c.tcb.rcvBuf = c.tcb.rcvBuf[n:]
+	// 読んだぶん受信バッファが空いた。SWS 閾値を超えていれば窓を開き、開いたら
+	// window update ACK で送信側へ知らせる (RFC 1122 §4.2.3.3)。これが無いと
+	// 窓が縮んで止まった送信側は (persist が起きない限り) 再開できない。
+	old := c.tcb.rcv.wnd
+	c.recomputeRcvWindow()
+	if c.tcb.rcv.wnd > old && c.tcb.state.synchronized() {
+		c.sendAck()
+	}
 	return n, nil
 }
 
@@ -125,14 +180,35 @@ func (c *Conn) acceptText(h TCPHeader, payload []byte) {
 		c.sendAck() // 全部既受信/窓外でも ACK で RCV.NXT を広告 (重複応答)。
 		return
 	}
-	if data.seq == c.tcb.rcv.nxt {
+	before := c.tcb.rcv.nxt
+	inOrder := data.seq == c.tcb.rcv.nxt
+	if inOrder {
 		c.tcb.rcvBuf = append(c.tcb.rcvBuf, data.data...)
 		c.tcb.rcv.nxt += uint32(len(data.data))
 		c.drainOoo()
 	} else {
 		c.insertOoo(data)
 	}
-	c.sendAck()
+	// RCV.NXT 前進ぶん受信窓を消費し右窓端 RCV.NXT+RCV.WND を固定する (窓を縮めない)。
+	c.consumeRcvWindow(c.tcb.rcv.nxt - before)
+	// out-of-order / gap 残りは即 ACK (損失検出を急がせる, RFC 1122 §4.2.3.2)。
+	// in-order で gap が無いフルセグメントだけ delayed ACK の対象にする。
+	full := uint32(len(data.data)) >= c.tcb.effSndMSS()
+	if inOrder && len(c.tcb.oooSegs) == 0 && full {
+		c.onDelayableSegment()
+	} else {
+		c.sendAck()
+	}
+}
+
+// consumeRcvWindow は RCV.NXT が n 前進したぶん RCV.WND を減らし右窓端を固定する。
+// 窓未満まで減ったら 0 で飽和させる (右窓端は RCV.NXT を下回らない)。
+func (c *Conn) consumeRcvWindow(n uint32) {
+	if uint32(c.tcb.rcv.wnd) > n {
+		c.tcb.rcv.wnd -= uint16(n)
+	} else {
+		c.tcb.rcv.wnd = 0
+	}
 }
 
 // trimToWindow は seq から始まる payload のうち、受信窓内かつ RCV.NXT 以降の部分を返す。

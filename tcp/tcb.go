@@ -164,6 +164,34 @@ type TCB struct {
 
 	// sendMSS は相手が広告した受信 MSS (送信時の 1 セグメント上限)。未受信なら既定 536。
 	sendMSS uint16
+
+	// --- フロー制御 (RFC 9293 §3.7 + RFC 1122 §4.2.3) ---
+
+	// rcvBuffTotal は受信バッファの総容量 (RCV.BUFF)。広告窓はこの上限から未読の
+	// rcvBuf 使用量を引いて決める。0 のときは defaultRcvWindow を総容量とみなす。
+	rcvBuffTotal uint32
+
+	// nagleDisabled は Nagle アルゴリズムの無効化フラグ (TCP_NODELAY 相当)。
+	// true なら未確認データ中でも sub-MSS を溜めず即送る。
+	nagleDisabled bool
+
+	// persistDeadline は zero-window persist タイマの満了時刻。persistArmed が
+	// true のときだけ有効。満了ごとに 1 octet probe を送り backoff 段階を進める。
+	persistDeadline time.Time
+	persistArmed    bool
+	persistBackoff  int // 指数バックオフ段階 (0 起点)。窓>0 受信でリセット。
+
+	// overrideDeadline は送信側 SWS/Nagle の override タイマ満了時刻。overrideArmed が
+	// true のときだけ有効。「未確認中・相手窓ありだがフル未満で詰まった」全ケースで
+	// arm し、満了で sub-MSS を強制送出する (Nagle デッドロックの唯一の活性保証)。
+	overrideDeadline time.Time
+	overrideArmed    bool
+
+	// delAckDeadline は delayed ACK タイマの満了時刻。delAckArmed が true のときだけ
+	// 有効。delAckCount は ACK 未送のフルセグメント数 (2 個目で即 ACK)。
+	delAckDeadline time.Time
+	delAckArmed    bool
+	delAckCount    int
 }
 
 // segFragment は受信した連続バイト片 (seq とデータ)。out-of-order 再組立て用。
@@ -227,4 +255,17 @@ const (
 const (
 	challengeAckLimit  = 10              // 1 窓あたりの送出上限
 	challengeAckWindow = 5 * time.Second // 計数窓
+)
+
+// フロー制御タイマの定数 seam (RFC 9293 §3.7 / RFC 1122 §4.2.3、調整可)。
+const (
+	// persistInitial は zero-window persist タイマの初回値。満了ごとに倍化し
+	// persistMax で飽和させる (RFC 9293 §3.8.6.1, RTO と同様の指数バックオフ)。
+	persistInitial = 1 * time.Second
+	persistMax     = 60 * time.Second
+	// overrideTimeout は送信側 SWS/Nagle の override 値。RFC 1122 §4.2.3.4 の
+	// 0.1〜1.0 秒の範囲。フル未満で詰まったとき満了で sub-MSS を強制送出する。
+	overrideTimeout = 200 * time.Millisecond
+	// delAckTimeout は delayed ACK の遅延上限。RFC 1122 §4.2.3.2 の 0.5 秒未満必須。
+	delAckTimeout = 200 * time.Millisecond
 )

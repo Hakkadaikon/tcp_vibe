@@ -166,3 +166,37 @@ func TestLoopbackLargeTransferUnderCwnd(t *testing.T) {
 	}
 	t.Logf("cwnd 制御下の大量転送 OK: %d バイト全着", len(got))
 }
+
+// フロー制御下 (小受信バッファで窓が頻繁に縮む) でも大容量データが全部・順序通りに
+// 届くことを確認する。受信窓を縮めず、読んで開いた窓を window update ACK で送信側へ
+// 伝える経路が end-to-end で働き、窓詰まりで止まらない (デッドロックしない) ことの証明。
+func TestLoopbackFlowControlSmallBuffer(t *testing.T) {
+	clientLink, serverLink := NewPipeLink()
+	fc := newFakeClock()
+
+	client := NewConn(clientLink, fc.Now, lbClient, lbServer)
+	server := NewConn(serverLink, fc.Now, lbServer, lbClient)
+	server.SetRcvBuffer(8000) // 小さい受信バッファ: 転送中に窓が何度も縮む
+
+	cr := newReceiver(client, clientLink, 65535)
+	sr := newReceiver(server, serverLink, 65535)
+	cr.Start()
+	sr.Start()
+	t.Cleanup(cr.Stop)
+	t.Cleanup(sr.Stop)
+
+	server.PassiveOpen()
+	client.ActiveOpen(1000)
+	waitStateSleep(t, client, Established)
+	waitStateSleep(t, server, Established)
+
+	big := bytes.Repeat([]byte("abcdefghij"), 8*defaultMSS) // 約 80 KB ≫ 受信バッファ
+	if _, err := client.Send(big); err != nil {
+		t.Fatalf("Send 失敗: %v", err)
+	}
+	got := recvAll(t, server, len(big))
+	if !bytes.Equal(got, big) {
+		t.Fatalf("フロー制御下の受信不一致: got %d bytes want %d", len(got), len(big))
+	}
+	t.Logf("小受信バッファ (8000B) で %d バイト全着 (窓開閉を繰り返し詰まらず完走)", len(got))
+}
