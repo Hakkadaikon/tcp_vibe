@@ -9,7 +9,7 @@ import (
 	"flag"
 	"log"
 
-	"github.com/hakkadaikon/tcp_vibe/tcp"
+	"github.com/hakkadaikon/tcp_vibe/tcp/link"
 	"github.com/hakkadaikon/tcp_vibe/tcp/network"
 )
 
@@ -22,7 +22,7 @@ func main() {
 		network.Debug = func(f string, a ...any) { log.Printf("[rdv] "+f, a...) }
 	}
 
-	r, err := tcp.NewRendezvous(uint16(*port))
+	r, err := link.NewRendezvous(uint16(*port))
 	if err != nil {
 		log.Fatalf("ランデブーサーバを開けない (:%d): %v", *port, err)
 	}
