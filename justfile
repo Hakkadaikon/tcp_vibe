@@ -50,6 +50,13 @@ fmt-check:
 test-pbt:
     go test -race -run 'Property|Quick|Frame' -count=20 ./...
 
+# パーサ (ヘッダ/オプション) の fuzz を短時間探索する (target ごと既定 10s)。
+# 通常テストでも seed corpus は実行され panic を検出する。長く回すなら time を増やす。
+fuzz time="10s":
+    go test -run '^$' -fuzz='^FuzzParseTCPHeader$' -fuzztime={{time}} ./tcp/
+    go test -run '^$' -fuzz='^FuzzParseTCPOptions$' -fuzztime={{time}} ./tcp/
+    go test -run '^$' -fuzz='^FuzzParseIPv4Header$' -fuzztime={{time}} ./tcp/
+
 # 2 プロセス間の実通信 e2e (tcpdemo を server/client で起動し UDP トンネル越しに検証)
 # build tag e2e で分離。-count=1 でキャッシュを無効化し毎回実プロセスを起動する。
 e2e:

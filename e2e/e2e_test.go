@@ -8,6 +8,8 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"math/rand"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -67,11 +69,14 @@ func runDemo(t *testing.T, bin string, args ...string) (exitCode int, logs strin
 func TestUDPHandshakeDataClose(t *testing.T) {
 	bin := buildDemo(t)
 
-	const (
-		portA = "45100"             // server の UDP ローカル / client の相手
-		portB = "45101"             // client の UDP ローカル / server の相手
-		want  = "hello from client" // client が送り server が受け取るデータ
-	)
+	// 固定ポートは連続実行や並行実行で衝突 (address already in use) しうる。
+	// 2 プロセスが互いの相手ポートを起動時フラグで知る設計上 OS 自動割当 (port 0) は
+	// 使えない (片方の割当ポートをもう片方へ事前に伝える手段が無い) ため、
+	// 実行ごとに ephemeral 帯のランダムな連番ペアを選んで衝突確率を下げる。
+	base := 40000 + rand.Intn(20000)
+	portA := fmt.Sprintf("%d", base)   // server の UDP ローカル / client の相手
+	portB := fmt.Sprintf("%d", base+1) // client の UDP ローカル / server の相手
+	const want = "hello from client"   // client が送り server が受け取るデータ
 
 	type result struct {
 		code int

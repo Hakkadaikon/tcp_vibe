@@ -54,24 +54,27 @@ func TestDemuxNoMatchNonRstGeneratesOneRst(t *testing.T) {
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
 
-	// どの接続にも一致しない ACK を送る → RST 応答。
+	// どの接続にも一致しない ACK を送る → RST 応答。demux を同期で叩けば、戻った時点で
+	// 応答はすべて peer inbox に積まれており、個数を確定的に数えられる (実時間に依存しない)。
 	pkt := buildSeg(dxRemote, dxLocal, TCPHeader{Flags: Flags(FlagACK), SeqNum: 100, AckNum: 500, DataOffset: 5}, nil)
-	_ = peer.WritePacket(pkt)
+	s.demux(pkt)
 
-	h := readSegWithin(t, peer, time.Second)
-	if h == nil {
+	h, ok := drainPeerNonblockKeep(peer)
+	if !ok {
 		t.Fatal("RST が返らない")
 	}
 	if !h.Flags.Has(FlagRST) {
 		t.Fatalf("RST のはず: flags=%v", h.Flags)
 	}
 	// 2 つ目は来ない (ちょうど 1 つ)。
-	if extra := readSegWithin(t, peer, 100*time.Millisecond); extra != nil {
+	if extra, ok := drainPeerNonblockKeep(peer); ok {
 		t.Fatalf("RST は 1 つのはず、2 つ目が来た: flags=%v", extra.Flags)
 	}
 }
 
 // RST 入力にはRST を返さない (RST に RST を返さない)。
+// 「応答が来ないこと」は実時間タイムアウトでなく demux を同期で叩いて確定的に判定する。
+// demux が返った時点で同期応答はすべて peer inbox に積まれているので、空なら確実に無応答。
 func TestDemuxRstInputNoRstBack(t *testing.T) {
 	stackLink, peer := NewPipeLink()
 	fc := newFakeClock()
@@ -79,9 +82,9 @@ func TestDemuxRstInputNoRstBack(t *testing.T) {
 	t.Cleanup(s.Close)
 
 	pkt := buildSeg(dxRemote, dxLocal, TCPHeader{Flags: Flags(FlagRST), SeqNum: 100, DataOffset: 5}, nil)
-	_ = peer.WritePacket(pkt)
+	s.demux(pkt)
 
-	if h := readSegWithin(t, peer, 200*time.Millisecond); h != nil {
+	if h, ok := drainPeerNonblockKeep(peer); ok {
 		t.Fatalf("RST 入力に応答してはいけない: flags=%v", h.Flags)
 	}
 }
@@ -249,9 +252,10 @@ func TestDemuxInvalidSrcSynDropped(t *testing.T) {
 
 	mcast := [4]byte{224, 0, 0, 5}
 	pkt := buildSeg(mcast, dxLocal, TCPHeader{SrcPort: 1234, DstPort: 9000, Flags: Flags(FlagSYN), SeqNum: 5000, DataOffset: 5}, nil)
-	_ = peer.WritePacket(pkt)
+	// demux を同期で叩き、戻った時点の peer inbox を確定的に検査する (実時間に依存しない)。
+	s.demux(pkt)
 
-	if h := readSegWithin(t, peer, 200*time.Millisecond); h != nil {
+	if h, ok := drainPeerNonblockKeep(peer); ok {
 		t.Fatalf("不正 src の SYN は破棄するはず、応答が来た: flags=%v", h.Flags)
 	}
 }
@@ -259,7 +263,7 @@ func TestDemuxInvalidSrcSynDropped(t *testing.T) {
 // 完全一致 TCB が LISTEN より優先される。LISTEN と同じ local port で確立済み
 // 接続があるとき、その 4-tuple 宛のセグメントは派生ではなく既存接続へ届く。
 func TestDemuxExactMatchBeatsListen(t *testing.T) {
-	stackLink, peer := NewPipeLink()
+	stackLink, _ := NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
@@ -282,13 +286,10 @@ func TestDemuxExactMatchBeatsListen(t *testing.T) {
 
 	// この 4-tuple 宛にデータ ACK を送る → 派生 (SYN-ACK) ではなく既存へ届く。
 	pkt := buildSeg(dxRemote, dxLocal, TCPHeader{SrcPort: 1234, DstPort: 9000, Flags: Flags(FlagACK), SeqNum: 5000, AckNum: 7000, DataOffset: 5, Window: maxWindow}, []byte("hi"))
-	_ = peer.WritePacket(pkt)
+	// demux を同期で叩く。戻った時点で onSegment は完了しているので sleep ポーリング不要。
+	s.demux(pkt)
 
 	// 既存接続が RCV.NXT を進めれば届いた証拠。派生なら新 Conn ができ既存は不変。
-	deadline := time.Now().Add(time.Second)
-	for existing.RcvNxt() == 5000 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
 	if existing.RcvNxt() != 5002 {
 		t.Fatalf("完全一致 TCB にデータが届いていない: RcvNxt=%d want 5002", existing.RcvNxt())
 	}
