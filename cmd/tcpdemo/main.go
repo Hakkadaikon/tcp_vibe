@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/hakkadaikon/tcp_vibe/tcp"
@@ -19,7 +20,7 @@ import (
 
 func main() {
 	mode := flag.String("mode", "client", "client (active open) または server (passive open)")
-	linkKind := flag.String("link", "tun", "リンク種別: tun (要 root/TUN)、udp (特権不要の UDP トンネル)、unix (特権不要・UDP プロトコルも通さない Unix domain socket)")
+	linkKind := flag.String("link", "tun", "リンク種別: tun (要 root/TUN)、udp (特権不要の UDP トンネル)、unix (Unix domain socket)、holepunch (ランデブー経由の UDP hole punching で NAT 越え)")
 	ifName := flag.String("tun", "tun0", "TUN デバイス名 (--link=tun)")
 	udpLocalPort := flag.Uint("udp-local-port", 40000, "UDP トンネルのローカルポート (--link=udp)")
 	udpRemotePort := flag.Uint("udp-remote-port", 40001, "UDP トンネルの相手ポート (--link=udp)")
@@ -30,6 +31,10 @@ func main() {
 	localPort := flag.Uint("local-port", 9000, "自分のポート")
 	remoteIP := flag.String("remote-ip", "10.0.0.2", "相手の IPv4 アドレス")
 	remotePort := flag.Uint("remote-port", 9001, "相手のポート")
+	rendezvous := flag.String("rendezvous", "127.0.0.1:7000", "ランデブーサーバの host:port (--link=holepunch)")
+	session := flag.String("session", "demo", "hole punching のセッション ID。両端で同じ値にする (--link=holepunch)")
+	punchTimeout := flag.Duration("punch-timeout", 10*time.Second, "hole punch 全体のタイムアウト (--link=holepunch)")
+	punchLocalPort := flag.Uint("punch-local-port", 0, "hole punch のローカル UDP ポート。0 で OS 自動割当 (--link=holepunch)")
 	debug := flag.Bool("debug", false, "TCP スタックの診断ログを出す (受信/送信/TUN I/O)")
 	msl := flag.Duration("msl", 0, "MSL を上書き (例 2s)。TIME-WAIT は 2*MSL で抜ける。0 なら既定の 2 分 (TIME-WAIT 4 分)")
 	flag.Parse()
@@ -61,6 +66,14 @@ func main() {
 			log.Fatalf("Unix socket を開けない (local=%s remote=%s): %v", *unixLocal, *unixRemote, err)
 		}
 		log.Printf("Unix socket トンネル: local=%s remote=%s (特権不要・UDP プロトコル不使用)", *unixLocal, *unixRemote)
+	case "holepunch":
+		rIP, rPort := parseHostPort(*rendezvous)
+		log.Printf("hole punch: ランデブー %s 経由で session=%q の相手と直接 UDP を確立 (特権不要)", *rendezvous, *session)
+		link, err = tcp.DialHolePunch(rIP, rPort, *session, uint16(*punchLocalPort), *punchTimeout)
+		if err != nil {
+			log.Fatalf("hole punch 失敗 (相手不在/NAT が穴を開けられない可能性): %v", err)
+		}
+		log.Printf("hole punch 確立: 直接 UDP の土管が開いた。自作 TCP を流す")
 	default:
 		log.Fatalf("不明な --link: %q (tun / udp / unix)", *linkKind)
 	}
@@ -218,4 +231,17 @@ func parseIP(s string) [4]byte {
 		log.Fatalf("不正な IPv4 アドレス: %q", s)
 	}
 	return [4]byte{v4[0], v4[1], v4[2], v4[3]}
+}
+
+// parseHostPort は "host:port" を ([4]byte, uint16) に変換する。不正なら fatal。
+func parseHostPort(s string) ([4]byte, uint16) {
+	host, portStr, err := net.SplitHostPort(s)
+	if err != nil {
+		log.Fatalf("不正な host:port: %q (%v)", s, err)
+	}
+	p, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		log.Fatalf("不正なポート: %q", portStr)
+	}
+	return parseIP(host), uint16(p)
 }

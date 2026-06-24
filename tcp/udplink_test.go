@@ -111,6 +111,81 @@ func TestUDPLink_WriteAfterClose(t *testing.T) {
 	}
 }
 
+// 対称化: punch リンクは remote を指定せずに開き、受信した送信元を学習して
+// 以後そこへ送り返せる。A は固定 remote、B は学習で、B が A の送信元を覚えて往復する。
+func TestUDPLink_PunchLearnsSource(t *testing.T) {
+	const pa, pb = 53020, 53021
+	a, err := NewUDPLink(pa, loIP, pb)
+	if err != nil {
+		t.Fatalf("NewUDPLink A: %v", err)
+	}
+	t.Cleanup(func() { a.Close() })
+	b, err := NewUDPLinkPunch(pb)
+	if err != nil {
+		t.Fatalf("NewUDPLinkPunch B: %v", err)
+	}
+	t.Cleanup(func() { b.Close() })
+
+	// remote 未確定の B は書けない。
+	if err := b.WritePacket([]byte("x")); !errors.Is(err, ErrPunchPeerUnknown) {
+		t.Fatalf("確定前 WritePacket は ErrPunchPeerUnknown のはず: got %v", err)
+	}
+
+	// A -> B。B は送信元 (A のアドレス) を学習する。
+	want := []byte("from-A")
+	if err := a.WritePacket(want); err != nil {
+		t.Fatalf("WritePacket A: %v", err)
+	}
+	got, err := b.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket B: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("A->B 不一致: got %q want %q", got, want)
+	}
+
+	// 学習後、B は remote を知らずとも A へ返せる。
+	reply := []byte("reply-from-B")
+	if err := b.WritePacket(reply); err != nil {
+		t.Fatalf("学習後 WritePacket B: %v", err)
+	}
+	got2, err := a.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket A: %v", err)
+	}
+	if !bytes.Equal(got2, reply) {
+		t.Fatalf("B->A 不一致: got %q want %q", got2, reply)
+	}
+}
+
+// setRemote で先に固定すると学習を待たずに書ける。
+func TestUDPLink_PunchSetRemote(t *testing.T) {
+	const pa, pb = 53022, 53023
+	a, err := NewUDPLink(pa, loIP, pb)
+	if err != nil {
+		t.Fatalf("NewUDPLink A: %v", err)
+	}
+	t.Cleanup(func() { a.Close() })
+	b, err := NewUDPLinkPunch(pb)
+	if err != nil {
+		t.Fatalf("NewUDPLinkPunch B: %v", err)
+	}
+	t.Cleanup(func() { b.Close() })
+
+	b.setRemote(loIP, pa)
+	want := []byte("from-B-after-setRemote")
+	if err := b.WritePacket(want); err != nil {
+		t.Fatalf("setRemote 後 WritePacket: %v", err)
+	}
+	got, err := a.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket A: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("不一致: got %q want %q", got, want)
+	}
+}
+
 // localPort=0 を渡すと OS が空きポートを自動割当し、LocalPort で取得できる。
 func TestUDPLink_AutoAssignPort(t *testing.T) {
 	l, err := NewUDPLink(0, loIP, 53009)
