@@ -3,19 +3,33 @@
 自作スタックのレイヤとファイル構成、状態遷移、パケット送受信フローを説明する。
 リンク層の種類と選び方は [networking.md](networking.md) にまとめている。
 
-実装は `tcp/` 配下にある。
-プロトコルのロジックを下から積み上げ、その上に状態機械、さらに上に多重化と運搬層の抽象を置く構造になっている。
+実装は `tcp/` 配下を三つのパッケージに分けている。
+依存は一方向で、上の層が下の層を参照する。
 
-## 部品
+| パッケージ | 層 | 役割 |
+|---|---|---|
+| `tcp/network` | ネットワーク層 | IPv4 ヘッダ、チェックサム、バイトオーダ変換 |
+| `tcp/link` | リンク層 | IP パケットを運ぶ Link の抽象と実装 (pipe/unix/udp/tun/afpacket、ARP、hole punching) |
+| `tcp/transport` | トランスポート層 | TCP 本体。状態機械、データ転送、輻輳・フロー制御、多重化 |
+
+依存の向きは `transport → link → network` および `transport → network` で、逆流はない。
+`network` はどの層も参照せず、`link` は `network` だけを参照する。
+
+## ネットワーク層 (`tcp/network`)
+
+| ファイル | 役割 |
+|---|---|
+| `checksum.go` | 擬似ヘッダ込みのチェックサム計算 |
+| `bytes.go` | ビッグエンディアン変換 |
+| `ipv4.go` | IPv4 ヘッダの marshal/parse とセグメント切り出し |
+
+## トランスポート層の部品 (`tcp/transport`)
 
 下位の純粋な部品から並べる。
 
 | ファイル | 役割 |
 |---|---|
 | `seq.go` | シーケンス番号の mod 2^32 環状算術 |
-| `checksum.go` | 擬似ヘッダ込みのチェックサム計算 |
-| `bytes.go` | ビッグエンディアン変換 |
-| `ipv4.go` | IPv4 ヘッダの marshal/parse |
 | `header.go` | TCP ヘッダの marshal/parse |
 | `options.go` | TCP オプションの marshal/parse と折衝 |
 | `framing.go` | バイトストリームからの IPv4 パケット再分割 |
