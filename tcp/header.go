@@ -28,6 +28,7 @@ type TCPHeader struct {
 	Window     uint16
 	Checksum   uint16 // 擬似ヘッダ依存。Marshal では 0、TCPChecksum で別途埋める
 	UrgentPtr  uint16
+	Options    []byte // オプション領域の生バイト (4 バイト境界済み)。nil ならオプション無し
 }
 
 var (
@@ -35,20 +36,21 @@ var (
 	errTCPDataOffset = errors.New("tcp: data offset out of range")
 )
 
-// Marshal は TCP ヘッダを 20 バイトへ書き出す。
-// オプションは扱わないため DataOffset は 5 固定で出力する。
+// Marshal は TCP ヘッダ (20 バイト + オプション領域) を書き出す。
+// Options は 4 バイト境界済みの生バイト列を想定し、その長さから DataOffset を決める。
 // チェックサムは擬似ヘッダが必要なため 0 のままにし、呼び出し側が TCPChecksum で埋める。
 func (h TCPHeader) Marshal() []byte {
-	b := make([]byte, 20)
+	b := make([]byte, 20+len(h.Options))
 	putBe16(b, 0, h.SrcPort)
 	putBe16(b, 2, h.DstPort)
 	putBe32(b, 4, h.SeqNum)
 	putBe32(b, 8, h.AckNum)
-	b[12] = 5 << 4 // data offset=5, reserved=0
+	b[12] = DataOffsetForOptions(len(h.Options)) << 4 // data offset, reserved=0
 	b[13] = byte(h.Flags & 0x3F)
 	putBe16(b, 14, h.Window)
 	putBe16(b, 16, h.Checksum)
 	putBe16(b, 18, h.UrgentPtr)
+	copy(b[20:], h.Options)
 	return b
 }
 
@@ -65,6 +67,10 @@ func ParseTCPHeader(b []byte) (TCPHeader, error) {
 	if len(b) < int(dataOffset)*4 { // 宣言長 > 実バッファ: 過剰確保せず拒否
 		return TCPHeader{}, errTCPShort
 	}
+	var opts []byte
+	if hdrLen := int(dataOffset) * 4; hdrLen > 20 {
+		opts = b[20:hdrLen] // オプション領域 (固定 20 バイト超)
+	}
 	return TCPHeader{
 		SrcPort:    be16(b, 0),
 		DstPort:    be16(b, 2),
@@ -75,5 +81,6 @@ func ParseTCPHeader(b []byte) (TCPHeader, error) {
 		Window:     be16(b, 14),
 		Checksum:   be16(b, 16),
 		UrgentPtr:  be16(b, 18),
+		Options:    opts,
 	}, nil
 }

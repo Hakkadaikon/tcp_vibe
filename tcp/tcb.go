@@ -71,7 +71,7 @@ const (
 type sndVars struct {
 	una uint32 // 未確認の最古 seq
 	nxt uint32 // 次に送る seq
-	wnd uint16 // 送信窓
+	wnd uint32 // 送信窓。Window Scale 後は 65535 を超え最大 2^30 まで取りうる
 	wl1 uint32 // 最後に窓更新した seg の seq
 	wl2 uint32 // 最後に窓更新した seg の ack
 	iss uint32 // 自分の初期送信 seq
@@ -97,9 +97,9 @@ type TCB struct {
 	// 到達の事実として残すための観測専用フラグ (遷移ロジックには影響しない)。
 	reachedEstablished bool
 
-	// maxSndWnd は peer から受信した過去最大の窓。RFC 5961 ACK 受理範囲の下限に使う。
-	// window scale 無しなので初期値は 65535 上限まで取りうる。
-	maxSndWnd uint16
+	// maxSndWnd は peer から受信した過去最大の窓 (スケール適用後)。RFC 5961 ACK 受理
+	// 範囲の下限に使う。Window Scale 有効時は 65535 を超え最大 2^30 まで取りうる。
+	maxSndWnd uint32
 
 	clock Clock
 
@@ -143,6 +143,27 @@ type TCB struct {
 	// この seq まで読み切ったら Recv は EOF を返す。
 	peerFin    bool
 	peerFinSeq uint32
+
+	// --- オプション折衝結果 (握手で確定。RFC 7323 / RFC 2018) ---
+
+	// sndWindShift は相手から受けた Window Scale (Snd.Wind.Shift)。入力 SEG.WND を
+	// 左シフトして SND.WND にする。rcvWindShift は自分が広告する shift (Rcv.Wind.Shift)
+	// で、出力 SEG.WND を右シフトする。両側が SYN で WScale を送ったときのみ非 0。
+	sndWindShift uint8
+	rcvWindShift uint8
+
+	// tsOK は両側が timestamps を折衝したか (Snd.TS.OK)。true なら以降の全セグメントに
+	// TS option を載せる。tsRecent は echo する相手の最新 TSval、lastAckSent は
+	// 直近に送った ACK 番号 (TS.Recent 更新の SEQ ゲート Last.ACK.sent)。
+	tsOK        bool
+	tsRecent    uint32
+	lastAckSent uint32
+
+	// sackOK は両側が SACK-Permitted を折衝したか (Sack.OK)。
+	sackOK bool
+
+	// sendMSS は相手が広告した受信 MSS (送信時の 1 セグメント上限)。未受信なら既定 536。
+	sendMSS uint16
 }
 
 // segFragment は受信した連続バイト片 (seq とデータ)。out-of-order 再組立て用。
@@ -178,8 +199,15 @@ func (s retxSeg) seqLen() uint32 {
 
 // defaultMSS は 1 セグメントに載せるデータの上限。TUN の MTU 1500 から
 // IPv4(20)+TCP(20) ヘッダを引いた 1460 より控えめにし、断片化しない値にする。
-// ponytail: MSS option による相手との折衝は未実装。固定値で足りる。折衝が要るならここを seam に。
+// 自分が SYN で広告する受信 MSS でもある。実際の送信上限は相手 MSS との min を使う。
 const defaultMSS = 1360
+
+// defaultSendMSS は相手 MSS 未受信時の送信 MSS (RFC 9293 の既定値 536, IPv4)。
+const defaultSendMSS uint16 = 536
+
+// myWindowScale は自分が SYN/SYN-ACK で広告する Window Scale shift (Rcv.Wind.Shift)。
+// 14 以下。65535 を超える受信窓を扱えるようにする (RFC 7323 §2)。
+const myWindowScale uint8 = 7
 
 // msl は Maximum Segment Lifetime (RFC 9293 §3.4.2 の推奨値 2 分)。
 const msl = 2 * time.Minute

@@ -42,7 +42,7 @@ func NewConn(link Link, clock Clock, local, remote Endpoint) *Conn {
 	c.ports.dst = remote.Port
 	c.tcb.state = Closed
 	c.tcb.clock = clock
-	c.tcb.maxSndWnd = maxWindow
+	c.tcb.maxSndWnd = uint32(maxWindow)
 	c.tcb.timeWaitDuration = timeWaitDuration // 既定 2*MSL (RFC 通り)
 	c.tcb.cong = newCongestion(defaultMSS)
 	return c
@@ -140,7 +140,19 @@ func (c *Conn) ActiveOpen(iss uint32) {
 	c.tcb.snd.nxt = iss + 1
 	c.tcb.rcv.wnd = defaultRcvWindow
 	c.tcb.state = SynSent
-	c.send(Flags(FlagSYN), iss, 0)
+	c.sendSyn(Flags(FlagSYN), iss, 0)
+}
+
+// sendSyn は SYN / SYN-ACK をオプション (MSS/WScale/TS/SACK-Permitted) 込みで送り、
+// 再送キューに積む。再送は writeSeg 経由でオプションなしになるが SYN は折衝済みなら
+// 1 度通れば足りる。ponytail: SYN 再送時のオプション再送は割愛 (握手は早期に確立する)。
+func (c *Conn) sendSyn(flags Flags, seq, ack uint32) {
+	c.writeSegOpts(flags, seq, ack, nil, c.synOptionBytes(ack))
+	seg := retxSeg{seq: seq, flags: flags, sentAt: c.tcb.clock()}
+	if len(c.tcb.retxQueue) == 0 {
+		c.tcb.curRTO = c.currentRTO()
+	}
+	c.tcb.retxQueue = append(c.tcb.retxQueue, seg)
 }
 
 // PassiveOpen は受動オープン。LISTEN へ遷移し相手の SYN を待つ (RFC 9293 §3.10.1)。
@@ -230,7 +242,8 @@ func (c *Conn) ackRetxQueue(ack uint32) {
 			break
 		}
 		// Karn: 再送していないセグメントだけ RTT サンプルに使う。
-		if !s.retransmitted {
+		// timestamps 有効時は TSecr で測るのでここでは測らない (二重計上を避ける)。
+		if !s.retransmitted && !c.tcb.tsOK {
 			c.sampleRTT(s.sentAt)
 		}
 		c.tcb.retxQueue = c.tcb.retxQueue[1:]
@@ -261,6 +274,22 @@ func (c *Conn) sampleRTT(sentAt time.Time) {
 		c.tcb.rttValid = true
 	} else {
 		c.tcb.rtt = c.tcb.rtt.UpdateEst(rms)
+	}
+}
+
+// sampleRTTFromTimestamp は echo された TSecr から RTT を測り推定器を更新する
+// (RFC 7323 §4.1)。RTT = 現在の timestamp clock - TSecr (ms)。timestamp clock と
+// 同じ wrap 空間なので減算は modulo 2^32 で正しい。負・0 は 1ms に丸める。
+func (c *Conn) sampleRTTFromTimestamp(tsecr uint32) {
+	r := c.tcb.tsNow() - tsecr // wrap 減算 = 経過 ms
+	if r == 0 {
+		r = 1
+	}
+	if !c.tcb.rttValid {
+		c.tcb.rtt = initEst(r, clockGranMS)
+		c.tcb.rttValid = true
+	} else {
+		c.tcb.rtt = c.tcb.rtt.UpdateEst(r)
 	}
 }
 
@@ -301,6 +330,30 @@ func (c *Conn) sendData(flags Flags, seq, ack uint32, payload []byte) {
 // (キュー操作なし)。TCP チェックサムを擬似ヘッダ込みで埋めてから IPv4 ヘッダで包む。
 // これにより送出が受信ループ (IPv4 を剥がし TCP チェックサムを検証する) の前提と一致する。
 func (c *Conn) writeSeg(flags Flags, seq, ack uint32, payload []byte) {
+	c.writeSegOpts(flags, seq, ack, payload, nil)
+}
+
+// writeSegOpts は writeSeg にオプション領域 (生バイト) を加えて送る。
+// 出力 SEG.WND は折衝した Rcv.Wind.Shift で右シフトする (SYN/SYN-ACK は生値)。
+// ACK を立てたセグメントを送った時点を Last.ACK.sent として記録する (TS.Recent ゲート用)。
+func (c *Conn) writeSegOpts(flags Flags, seq, ack uint32, payload, opts []byte) {
+	// timestamps 折衝済みの非 SYN・非 RST セグメントには TS option を載せる
+	// (RFC 7323 §3)。TSval=現在のクロック、ACK セット時 TSecr=TS.Recent、無しは 0。
+	if opts == nil && c.tcb.tsOK && !flags.Has(FlagSYN) && !flags.Has(FlagRST) {
+		o := TCPOptions{HasTimestamp: true, TSVal: c.tcb.tsNow()}
+		if flags.Has(FlagACK) {
+			o.TSecr = c.tcb.tsRecent
+		}
+		opts = o.Marshal()
+	}
+	win := c.tcb.rcv.wnd
+	// SYN を含まないセグメントの window だけスケールする (RFC 7323 §2.3)。
+	if !flags.Has(FlagSYN) && c.tcb.rcvWindShift > 0 {
+		win = uint16(uint32(c.tcb.rcv.wnd) >> c.tcb.rcvWindShift)
+	}
+	if flags.Has(FlagACK) {
+		c.tcb.lastAckSent = ack
+	}
 	h := TCPHeader{
 		SrcPort:    c.ports.src,
 		DstPort:    c.ports.dst,
@@ -308,7 +361,8 @@ func (c *Conn) writeSeg(flags Flags, seq, ack uint32, payload []byte) {
 		AckNum:     ack,
 		DataOffset: 5,
 		Flags:      flags,
-		Window:     c.tcb.rcv.wnd,
+		Window:     win,
+		Options:    opts,
 	}
 	seg := append(h.Marshal(), payload...)
 	putBe16(seg, 16, TCPChecksum(c.local.IP, c.remote.IP, seg))
@@ -445,8 +499,11 @@ func (c *Conn) onSegmentListen(h TCPHeader) {
 		c.tcb.snd.nxt = c.tcb.snd.iss + 1
 		c.tcb.origin = OriginPassive
 		c.tcb.state = SynReceived
-		c.initSendWindow(h) // 相手の広告窓で SND.WND を初期化
-		c.send(Flags(FlagSYN|FlagACK), c.tcb.snd.iss, c.tcb.rcv.nxt)
+		if o, err := ParseTCPOptions(h.Options); err == nil {
+			c.negotiateOptions(o) // 相手 SYN の option で折衝結果を確定
+		}
+		c.initSendWindow(h) // 相手の広告窓で SND.WND を初期化 (SYN は生値)
+		c.sendSyn(Flags(FlagSYN|FlagACK), c.tcb.snd.iss, c.tcb.rcv.nxt)
 	}
 }
 
@@ -480,11 +537,14 @@ func (c *Conn) onSegmentSynSent(h TCPHeader) {
 	// SYN を受信。
 	c.tcb.rcv.irs = h.SeqNum
 	c.tcb.rcv.nxt = h.SeqNum + 1
+	if o, err := ParseTCPOptions(h.Options); err == nil {
+		c.negotiateOptions(o) // 相手 SYN/SYN-ACK の option で折衝結果を確定
+	}
 	if ackOK {
 		// SYN,ACK で自 SYN が確認された → ESTABLISHED。
 		c.tcb.snd.una = h.AckNum
 		c.ackRetxQueue(h.AckNum) // 確認済み SYN を再送キューから除去
-		c.initSendWindow(h)      // 相手の広告窓で SND.WND を初期化
+		c.initSendWindow(h)      // 相手の広告窓で SND.WND を初期化 (SYN は生値)
 		c.tcb.state = Established
 		c.tcb.reachedEstablished = true
 		c.sendAck()
@@ -492,13 +552,24 @@ func (c *Conn) onSegmentSynSent(h TCPHeader) {
 		// bare SYN (同時オープン) → SYN-RECEIVED (active origin)。
 		c.tcb.origin = OriginActive
 		c.tcb.state = SynReceived
-		c.send(Flags(FlagSYN|FlagACK), c.tcb.snd.iss, c.tcb.rcv.nxt)
+		c.sendSyn(Flags(FlagSYN|FlagACK), c.tcb.snd.iss, c.tcb.rcv.nxt)
 	}
 }
 
 // onSegmentSynchronized は同期状態 (および SYN-RECEIVED) の固定処理順序。
 // RFC 9293 §3.10.7.4 + RFC 5961 の三チェックを順序通りに適用する。
 func (c *Conn) onSegmentSynchronized(h TCPHeader, payload []byte) {
+	o, _ := ParseTCPOptions(h.Options) // 不正 option は無視 (ゼロ値で続行)
+
+	// 0. PAWS: timestamps 折衝済みで TSopt を持つ非 RST セグメントが TS.Recent より
+	//    厳密に古ければ受理しない (RFC 7323 §5.3)。acceptability より前に行い、
+	//    drop しても ACK を返す。RST は PAWS 対象外。
+	if c.tcb.tsOK && o.HasTimestamp && !h.Flags.Has(FlagRST) &&
+		pawsStale(o.TSVal, c.tcb.tsRecent) {
+		c.sendAck()
+		return
+	}
+
 	// 1. 受理性テスト。受理不可かつ RST 無なら空 ACK を返し破棄。
 	//    RST は受理不可でも 5961 の窓判定へ進めるため別扱い。
 	if !c.tcb.acceptable(h, payload) && !h.Flags.Has(FlagRST) {
@@ -519,9 +590,20 @@ func (c *Conn) onSegmentSynchronized(h TCPHeader, payload []byte) {
 		return
 	}
 
+	// TS.Recent 更新 (RFC 7323 §4.3): TSopt が新しく (>= TS.Recent) かつ
+	//    SEG.SEQ =< Last.ACK.sent のときだけ TS.Recent を進める (環状順序で単調)。
+	if c.tcb.tsOK && o.HasTimestamp {
+		c.tcb.tsRecent = tsRecentUpdate(c.tcb.tsRecent, o.TSVal, h.SeqNum, c.tcb.lastAckSent)
+	}
+
 	// 4. ACK field 処理 (RFC 5961 §5.2 data injection を含む)。
 	if !h.Flags.Has(FlagACK) {
 		return // 同期状態で ACK off は破棄。
+	}
+	// TSecr による RTT 測定 (RFC 7323 §4.1, Karn の例外)。echo された TSval から
+	//    RTT サンプルを取り推定器へ渡す。再送セグメントでも測れる。
+	if c.tcb.tsOK && o.HasTimestamp && o.TSecr != 0 {
+		c.sampleRTTFromTimestamp(o.TSecr)
 	}
 	if !c.handleAck(h, payload) {
 		return // ACK 受理範囲外: challenge ACK 済み、データ適用せず破棄。
@@ -568,7 +650,7 @@ func (c *Conn) resetConnection() {
 // 範囲外なら challenge ACK を返して false を返す (SND.UNA を前進させない)。
 // 範囲内なら acceptable ACK のときだけ SND.UNA を前進させ、状態遷移する。
 func (c *Conn) handleAck(h TCPHeader, payload []byte) bool {
-	lo := c.tcb.snd.una - uint32(c.tcb.maxSndWnd)
+	lo := c.tcb.snd.una - c.tcb.maxSndWnd
 	if SeqLT(h.AckNum, lo) || SeqGT(h.AckNum, c.tcb.snd.nxt) {
 		c.sendChallengeAck()
 		return false
@@ -609,7 +691,7 @@ func (c *Conn) isDupAck(h TCPHeader, payload []byte) bool {
 	if h.AckNum != c.tcb.snd.una {
 		return false
 	}
-	return h.Window == c.tcb.snd.wnd // 窓が同一 (窓更新でない)
+	return uint32(h.Window)<<c.tcb.sndWindShift == c.tcb.snd.wnd // 窓が同一 (窓更新でない)
 }
 
 // onDuplicateAck は重複 ACK を輻輳制御へ渡し、3 つ目で損失セグメントを即再送する
@@ -638,28 +720,72 @@ func (c *Conn) fastRetransmit() {
 	front.retransmitted = true
 }
 
+// synOptionBytes は SYN / SYN-ACK に載せる自分のオプションを生バイトで返す。
+// 自分の受信 MSS・希望 Window Scale・Timestamps・SACK-Permitted を常に提示する。
+// TS option のみ ACK 番号に応じて TSecr を載せる (SYN 単独は TSecr=0)。
+func (c *Conn) synOptionBytes(ack uint32) []byte {
+	o := TCPOptions{
+		HasMSS: true, MSS: defaultMSS,
+		HasWScale: true, WindowScale: myWindowScale,
+		HasTimestamp: true, TSVal: c.tcb.tsNow(),
+		SACKPermitted: true,
+	}
+	if ack != 0 {
+		o.TSecr = c.tcb.tsRecent
+	}
+	return o.Marshal()
+}
+
+// negotiateOptions は握手で受け取った相手の SYN/SYN-ACK オプションを TCB へ反映する
+// (RFC 7323 / RFC 2018 / RFC 9293)。自分は SYN で全 option を提示しているので、
+// 各機能は相手も送った場合のみ有効 (両側折衝)。Window Scale は >14 を 14 に clamp する
+// (ParseTCPOptions が clamp 済み)。相手が送らなければ shift=0 で scaling 無効。
+func (c *Conn) negotiateOptions(o TCPOptions) {
+	if o.HasWScale {
+		c.tcb.sndWindShift = o.WindowScale // Snd.Wind.Shift (相手の shift)
+		c.tcb.rcvWindShift = myWindowScale // Rcv.Wind.Shift (自分の shift)
+	} // 相手が欠けば両 shift=0 (初期値) のまま = scaling 無効
+	if o.HasTimestamp {
+		c.tcb.tsOK = true
+		c.tcb.tsRecent = o.TSVal
+	}
+	if o.SACKPermitted {
+		c.tcb.sackOK = true
+	}
+	if o.HasMSS {
+		c.tcb.sendMSS = o.MSS
+	} else {
+		c.tcb.sendMSS = defaultSendMSS // 未受信は既定 536 (RFC 9293)
+	}
+}
+
 // initSendWindow は握手で受け取った SYN/SYN,ACK の広告窓で SND.WND を初期化する
 // (RFC 9293 §3.10.7.3/4)。以後の更新は updateSendWindow が WL1/WL2 で順序判定する。
 func (c *Conn) initSendWindow(h TCPHeader) {
-	c.tcb.snd.wnd = h.Window
+	// SYN/SYN-ACK の window はスケールしない生値で初期化する (RFC 7323 §2.3)。
+	w := uint32(h.Window)
+	c.tcb.snd.wnd = w
 	c.tcb.snd.wl1 = h.SeqNum
 	c.tcb.snd.wl2 = h.AckNum
-	if h.Window > c.tcb.maxSndWnd {
-		c.tcb.maxSndWnd = h.Window
+	if w > c.tcb.maxSndWnd {
+		c.tcb.maxSndWnd = w
 	}
 }
 
 // updateSendWindow は相手の広告窓で SND.WND を更新する (RFC 9293 §3.10.7.4)。
 // 古い窓更新を弾くため SND.WL1/WL2 で順序を見る。maxSndWnd も最大値を追う。
 func (c *Conn) updateSendWindow(h TCPHeader) {
+	// 通常セグメントの window は Snd.Wind.Shift で左シフトして復元する
+	// (RFC 7323 §2.3, SND.WND = SEG.WND << Snd.Wind.Shift)。未折衝なら shift=0。
+	w := uint32(h.Window) << c.tcb.sndWindShift
 	if SeqLT(c.tcb.snd.wl1, h.SeqNum) ||
 		(c.tcb.snd.wl1 == h.SeqNum && SeqLEQ(c.tcb.snd.wl2, h.AckNum)) {
-		c.tcb.snd.wnd = h.Window
+		c.tcb.snd.wnd = w
 		c.tcb.snd.wl1 = h.SeqNum
 		c.tcb.snd.wl2 = h.AckNum
 	}
-	if h.Window > c.tcb.maxSndWnd {
-		c.tcb.maxSndWnd = h.Window
+	if w > c.tcb.maxSndWnd {
+		c.tcb.maxSndWnd = w
 	}
 }
 

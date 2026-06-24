@@ -179,7 +179,7 @@ func estab(t *testing.T) (*Conn, Link, *fakeClock) {
 	c.tcb.rcv.nxt = 8000
 	c.tcb.rcv.wnd = 1000
 	c.tcb.rcv.irs = 7999
-	c.tcb.maxSndWnd = maxWindow
+	c.tcb.maxSndWnd = uint32(maxWindow)
 	return c, peer, fc
 }
 

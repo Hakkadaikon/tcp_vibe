@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"bytes"
 	"testing"
 	"testing/quick"
 )
@@ -48,10 +49,43 @@ func TestTCPHeader_RoundTrip(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		return got == h
+		return headerEqual(got, h)
 	}
 	if err := quick.Check(f, &quick.Config{MaxCount: 2000}); err != nil {
 		t.Error(err)
+	}
+}
+
+// headerEqual はオプション生バイト列込みでヘッダ等価を判定する
+// (Options は slice なので == では比べられないため)。
+func headerEqual(a, b TCPHeader) bool {
+	return a.SrcPort == b.SrcPort && a.DstPort == b.DstPort &&
+		a.SeqNum == b.SeqNum && a.AckNum == b.AckNum &&
+		a.DataOffset == b.DataOffset && a.Flags == b.Flags &&
+		a.Window == b.Window && a.Checksum == b.Checksum &&
+		a.UrgentPtr == b.UrgentPtr && bytes.Equal(a.Options, b.Options)
+}
+
+// Marshal はオプション生バイトを載せ、Parse で同じ列が復元される。
+func TestTCPHeader_OptionsRoundTrip(t *testing.T) {
+	opts := TCPOptions{HasMSS: true, MSS: 1460, HasWScale: true, WindowScale: 7}.Marshal()
+	h := TCPHeader{
+		SrcPort: 1, DstPort: 2, SeqNum: 3, AckNum: 4,
+		Flags: Flags(FlagSYN), Window: 65535, Options: opts,
+	}
+	got, err := ParseTCPHeader(h.Marshal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Options, opts) {
+		t.Fatalf("options not preserved: got %v want %v", got.Options, opts)
+	}
+	o, err := ParseTCPOptions(got.Options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.HasMSS || o.MSS != 1460 || !o.HasWScale || o.WindowScale != 7 {
+		t.Fatalf("parsed options wrong: %+v", o)
 	}
 }
 
