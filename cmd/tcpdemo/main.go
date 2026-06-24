@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hakkadaikon/tcp_vibe/tcp"
+	"github.com/hakkadaikon/tcp_vibe/tcp/network"
 )
 
 func main() {
@@ -40,7 +41,7 @@ func main() {
 	flag.Parse()
 
 	if *debug {
-		tcp.Debug = func(f string, a ...any) { log.Printf("[tcp] "+f, a...) }
+		network.Debug = func(f string, a ...any) { log.Printf("[tcp] "+f, a...) }
 	}
 
 	local := tcp.Endpoint{IP: parseIP(*localIP), Port: uint16(*localPort)}

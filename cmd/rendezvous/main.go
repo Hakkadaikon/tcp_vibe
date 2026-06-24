@@ -10,6 +10,7 @@ import (
 	"log"
 
 	"github.com/hakkadaikon/tcp_vibe/tcp"
+	"github.com/hakkadaikon/tcp_vibe/tcp/network"
 )
 
 func main() {
@@ -18,7 +19,7 @@ func main() {
 	flag.Parse()
 
 	if *debug {
-		tcp.Debug = func(f string, a ...any) { log.Printf("[rdv] "+f, a...) }
+		network.Debug = func(f string, a ...any) { log.Printf("[rdv] "+f, a...) }
 	}
 
 	r, err := tcp.NewRendezvous(uint16(*port))

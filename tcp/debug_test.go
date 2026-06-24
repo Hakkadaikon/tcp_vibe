@@ -19,10 +19,3 @@ func TestFlagsStr(t *testing.T) {
 		}
 	}
 }
-
-// ipStr は [4]byte をドット区切りにする。
-func TestIPStr(t *testing.T) {
-	if got := ipStr([4]byte{10, 0, 0, 2}); got != "10.0.0.2" {
-		t.Errorf("ipStr = %q, want 10.0.0.2", got)
-	}
-}
