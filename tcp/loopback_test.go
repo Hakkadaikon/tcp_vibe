@@ -133,3 +133,36 @@ func TestLoopbackDataTransfer(t *testing.T) {
 	}
 	t.Logf("大データ受信 OK: %d バイト (MSS=%d なので複数セグメント)", len(gotBig), defaultMSS)
 }
+
+// 初期ウィンドウ (IW) を遥かに超える大データが、cwnd 制御下で ACK 駆動の
+// ウィンドウ成長を経て全部・順序通りに届くことを確認する。
+func TestLoopbackLargeTransferUnderCwnd(t *testing.T) {
+	clientLink, serverLink := NewPipeLink()
+	fc := newFakeClock()
+
+	client := NewConn(clientLink, fc.Now, lbClient, lbServer)
+	server := NewConn(serverLink, fc.Now, lbServer, lbClient)
+
+	cr := newReceiver(client, clientLink, 65535)
+	sr := newReceiver(server, serverLink, 65535)
+	cr.Start()
+	sr.Start()
+	t.Cleanup(cr.Stop)
+	t.Cleanup(sr.Stop)
+
+	server.PassiveOpen()
+	client.ActiveOpen(1000)
+	waitStateSleep(t, client, Established)
+	waitStateSleep(t, server, Established)
+
+	// IW (=3*MSS=4080) の約 30 倍。一度に送り切れず ACK で cwnd が伸びて初めて完走する。
+	big := bytes.Repeat([]byte("ABCDEFGHIJ"), 12*defaultMSS) // 約 120 KB
+	if _, err := client.Send(big); err != nil {
+		t.Fatalf("Send (large) 失敗: %v", err)
+	}
+	got := recvAll(t, server, len(big))
+	if !bytes.Equal(got, big) {
+		t.Fatalf("大量データ受信不一致: got %d bytes want %d", len(got), len(big))
+	}
+	t.Logf("cwnd 制御下の大量転送 OK: %d バイト全着", len(got))
+}

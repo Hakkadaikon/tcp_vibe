@@ -37,10 +37,20 @@ func (c *Conn) Send(data []byte) (int, error) {
 // 送信は mutex 保持中に呼ぶこと。
 func (c *Conn) flushSend() {
 	for {
-		// 送信窓の残余 = SND.UNA + SND.WND - SND.NXT。
+		// 送信窓の残余 = SND.UNA + SND.WND - SND.NXT (受信側の広告窓 rwnd)。
 		usable := c.tcb.snd.una + uint32(c.tcb.snd.wnd) - c.tcb.snd.nxt
 		if SeqGT(c.tcb.snd.nxt, c.tcb.snd.una+uint32(c.tcb.snd.wnd)) {
 			usable = 0 // 窓を超えている (SND.WND=0 直後など)
+		}
+		// 輻輳ウィンドウでも絞る: 送信中バイト + 今回送るぶん <= cwnd
+		// (RFC 5681, 送信量 <= min(cwnd, rwnd))。
+		inflight := c.tcb.snd.nxt - c.tcb.snd.una
+		var cwndRoom uint32
+		if c.tcb.cong.cwnd > inflight {
+			cwndRoom = c.tcb.cong.cwnd - inflight
+		}
+		if cwndRoom < usable {
+			usable = cwndRoom
 		}
 		if usable == 0 {
 			return

@@ -44,6 +44,7 @@ func NewConn(link Link, clock Clock, local, remote Endpoint) *Conn {
 	c.tcb.clock = clock
 	c.tcb.maxSndWnd = maxWindow
 	c.tcb.timeWaitDuration = timeWaitDuration // 既定 2*MSL (RFC 通り)
+	c.tcb.cong = newCongestion(defaultMSS)
 	return c
 }
 
@@ -90,6 +91,34 @@ func (c *Conn) RcvNxt() uint32 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.tcb.rcv.nxt
+}
+
+// RttSampled は RTT を一度でも測定したかを返す (テスト観測用)。
+func (c *Conn) RttSampled() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tcb.rttValid
+}
+
+// CurRTOms は現在の RTO をミリ秒で返す (テスト観測用)。
+func (c *Conn) CurRTOms() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tcb.curRTO.Milliseconds()
+}
+
+// SrttMS は RTT 推定器の現在の SRTT (ミリ秒) を返す (テスト観測用)。
+func (c *Conn) SrttMS() uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tcb.rtt.srtt
+}
+
+// SetCwnd は輻輳ウィンドウを設定する (テストで送信量を絞る/広げるための seam)。
+func (c *Conn) SetCwnd(cwnd uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tcb.cong.cwnd = cwnd
 }
 
 // SetMSL は MSL を設定し、TIME-WAIT の linger を 2*MSL に更新する。
@@ -170,27 +199,39 @@ func (c *Conn) checkRetransmit() {
 		c.tcb.curRTO = 0
 		return
 	}
+	// RTO 満了で輻輳制御を更新 (cwnd=1SMSS, ssthresh 半減は初回再送のみ)。
+	flightSize := c.tcb.snd.nxt - c.tcb.snd.una
+	c.tcb.cong.onRtoTimeout(flightSize)
 	// 先頭を再送し、回数・送信時刻を更新、RTO を倍化 (上限 maxRTO)。payload 込みで再送。
 	c.writeSeg(front.flags, front.seq, c.tcb.rcv.nxt, front.payload)
 	front.retries++
+	front.retransmitted = true // Karn: この ACK からは RTT を測らない
 	front.sentAt = c.tcb.clock()
-	if c.tcb.curRTO < maxRTO {
-		c.tcb.curRTO *= 2
-		if c.tcb.curRTO > maxRTO {
-			c.tcb.curRTO = maxRTO
-		}
-	}
+	c.tcb.curRTO = backoffRTO(c.tcb.curRTO)
+}
+
+// backoffRTO は満了時の指数バックオフ。time.Duration を ms 整数に直して backoff
+// (= min(cap, cur*2), RFC 6298 §5.5) を適用し、上限 maxRTO で飽和させる。
+func backoffRTO(cur time.Duration) time.Duration {
+	curMS := uint32(cur.Milliseconds())
+	capMS := uint32(maxRTO.Milliseconds())
+	return time.Duration(backoff(capMS, curMS)) * time.Millisecond
 }
 
 // ackRetxQueue は acceptable ACK で完全確認された先頭エントリ群を除去する。
 // SEG.SEQ+SEG.LEN =< SEG.ACK を満たすぶんが確認済み (RFC 9293 §3.8.1)。
-// 除去後、残りがあれば RTO を初期値に戻して再起動、空ならタイマ停止。
+// 確認したセグメントのうち再送していないものから RTT サンプルを 1 つ採り
+// (Karn, RFC 6298 §3, §4)、推定器を更新して RTO を測り直す。
 func (c *Conn) ackRetxQueue(ack uint32) {
 	removed := false
 	for len(c.tcb.retxQueue) > 0 {
 		s := c.tcb.retxQueue[0]
 		if !SeqLEQ(s.seq+s.seqLen(), ack) {
 			break
+		}
+		// Karn: 再送していないセグメントだけ RTT サンプルに使う。
+		if !s.retransmitted {
+			c.sampleRTT(s.sentAt)
 		}
 		c.tcb.retxQueue = c.tcb.retxQueue[1:]
 		removed = true
@@ -202,9 +243,34 @@ func (c *Conn) ackRetxQueue(ack uint32) {
 		c.tcb.curRTO = 0 // 全確認 → タイマ停止
 		return
 	}
-	// 新しい先頭から測り直す (RTO 初期化 + 送信時刻起点を現在へ)。
-	c.tcb.curRTO = initialRTO
+	// 新しい先頭から測り直す (RTO 再起動 + 送信時刻起点を現在へ)。
+	c.tcb.curRTO = c.currentRTO()
 	c.tcb.retxQueue[0].sentAt = c.tcb.clock()
+}
+
+// sampleRTT は 1 つの RTT サンプル (now - sentAt) で推定器を更新する (RFC 6298)。
+// 初回は initEst、以降は updateEst (順序: RTTVAR→SRTT)。負・0 は 1ms に丸める。
+func (c *Conn) sampleRTT(sentAt time.Time) {
+	r := c.tcb.clock().Sub(sentAt).Milliseconds()
+	if r < 1 {
+		r = 1 // 粒度未満は 1ms (RFC 6298 §4 step 2.4 の趣旨)
+	}
+	rms := uint32(r)
+	if !c.tcb.rttValid {
+		c.tcb.rtt = initEst(rms, clockGranMS)
+		c.tcb.rttValid = true
+	} else {
+		c.tcb.rtt = c.tcb.rtt.UpdateEst(rms)
+	}
+}
+
+// currentRTO は今の RTO (time.Duration) を返す。RTT 未測定なら initialRTO、
+// 測定済みなら推定器の Rto() (下限 1000ms) を使う (RFC 6298 §2.1/§2.4)。
+func (c *Conn) currentRTO() time.Duration {
+	if !c.tcb.rttValid {
+		return initialRTO
+	}
+	return time.Duration(c.tcb.rtt.Rto()) * time.Millisecond
 }
 
 // --- 送信ヘルパ ---
@@ -226,7 +292,7 @@ func (c *Conn) sendData(flags Flags, seq, ack uint32, payload []byte) {
 		return
 	}
 	if len(c.tcb.retxQueue) == 0 {
-		c.tcb.curRTO = initialRTO // キューが空からの追加でタイマ起動
+		c.tcb.curRTO = c.currentRTO() // キューが空からの追加でタイマ起動
 	}
 	c.tcb.retxQueue = append(c.tcb.retxQueue, seg)
 }
@@ -457,7 +523,7 @@ func (c *Conn) onSegmentSynchronized(h TCPHeader, payload []byte) {
 	if !h.Flags.Has(FlagACK) {
 		return // 同期状態で ACK off は破棄。
 	}
-	if !c.handleAck(h) {
+	if !c.handleAck(h, payload) {
 		return // ACK 受理範囲外: challenge ACK 済み、データ適用せず破棄。
 	}
 
@@ -501,7 +567,7 @@ func (c *Conn) resetConnection() {
 // (SND.UNA-MAX.SND.WND) =< SEG.ACK =< SND.NXT を先に行い、
 // 範囲外なら challenge ACK を返して false を返す (SND.UNA を前進させない)。
 // 範囲内なら acceptable ACK のときだけ SND.UNA を前進させ、状態遷移する。
-func (c *Conn) handleAck(h TCPHeader) bool {
+func (c *Conn) handleAck(h TCPHeader, payload []byte) bool {
 	lo := c.tcb.snd.una - uint32(c.tcb.maxSndWnd)
 	if SeqLT(h.AckNum, lo) || SeqGT(h.AckNum, c.tcb.snd.nxt) {
 		c.sendChallengeAck()
@@ -511,15 +577,65 @@ func (c *Conn) handleAck(h TCPHeader) bool {
 	// acceptable ack (SND.UNA < SEG.ACK =< SND.NXT) でのみ UNA 前進。
 	if AcceptableAck(c.tcb.snd.una, h.AckNum, c.tcb.snd.nxt) {
 		oldUna := c.tcb.snd.una
+		flightSize := c.tcb.snd.nxt - oldUna
+		ackedBytes := h.AckNum - oldUna
 		c.tcb.snd.una = h.AckNum
-		c.ackRetxQueue(h.AckNum) // 確認済みセグメントを再送キューから除去
+		c.ackRetxQueue(h.AckNum) // 確認済みセグメントを再送キューから除去 (RTT 採取込み)
 		c.releaseAckedSend(oldUna)
+		c.tcb.cong.onNewAck(ackedBytes, flightSize) // 新規 ACK で cwnd 更新 (RFC 5681)
+	} else if c.isDupAck(h, payload) {
+		c.onDuplicateAck(h)
 	}
 	// 送信窓を更新する。相手の広告窓を受け取り、空いたぶんを送り出す。
 	c.updateSendWindow(h)
 	c.advanceStateOnAck(h)
 	c.flushSend() // 窓が空いた / 確認が進んだぶん未送信データを送る。
 	return true
+}
+
+// isDupAck は重複 ACK か判定する (RFC 5681)。条件すべて満たすとき真:
+//   - 未確認データがある (再送キューが空でない)
+//   - データを運んでいない (SEG.LEN=0)
+//   - SYN/FIN フラグが立っていない
+//   - ACK 番号が既知の最大 ACK (= 現在の SND.UNA) と同じ
+//   - 広告窓が直前と変わらない (窓更新でないこと)
+func (c *Conn) isDupAck(h TCPHeader, payload []byte) bool {
+	if len(c.tcb.retxQueue) == 0 {
+		return false // 未確認データなし
+	}
+	if len(payload) > 0 || h.Flags.Has(FlagSYN) || h.Flags.Has(FlagFIN) {
+		return false
+	}
+	if h.AckNum != c.tcb.snd.una {
+		return false
+	}
+	return h.Window == c.tcb.snd.wnd // 窓が同一 (窓更新でない)
+}
+
+// onDuplicateAck は重複 ACK を輻輳制御へ渡し、3 つ目で損失セグメントを即再送する
+// (fast retransmit, RFC 5681 §3.2)。flightSize は ACK 前の送信中バイト数。
+func (c *Conn) onDuplicateAck(h TCPHeader) {
+	flightSize := c.tcb.snd.nxt - c.tcb.snd.una
+	if flightSize == 0 {
+		return // 判定は flightSize>0 のときだけ
+	}
+	wasFR := c.tcb.cong.state == ccFastRecovery
+	c.tcb.cong.onDupAck(flightSize)
+	// 3 つ目 (= FR に入った瞬間) で再送キュー先頭 (損失セグメント) を即再送する。
+	if !wasFR && c.tcb.cong.state == ccFastRecovery {
+		c.fastRetransmit()
+	}
+}
+
+// fastRetransmit は再送キュー先頭のセグメントを RTO を待たずに再送する。
+// Karn のため retransmitted を立て、RTT サンプルの対象外にする。
+func (c *Conn) fastRetransmit() {
+	if len(c.tcb.retxQueue) == 0 {
+		return
+	}
+	front := &c.tcb.retxQueue[0]
+	c.writeSeg(front.flags, front.seq, c.tcb.rcv.nxt, front.payload)
+	front.retransmitted = true
 }
 
 // initSendWindow は握手で受け取った SYN/SYN,ACK の広告窓で SND.WND を初期化する

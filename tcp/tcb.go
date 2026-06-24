@@ -113,8 +113,17 @@ type TCB struct {
 	// 先頭が最古の未確認セグメントで、RTO はこの先頭基準で駆動する (RFC 9293 §3.8.1)。
 	retxQueue []retxSeg
 	// curRTO は次の発火に使う現在の RTO。再送ごとに倍化する (指数バックオフ)。
-	// 0 はキューが空 (タイマ停止) を表す。
+	// 0 はキューが空 (タイマ停止) を表す。RTT サンプル取得後は rtt 由来の値になる。
 	curRTO time.Duration
+
+	// rtt は RTT 推定器 (RFC 6298)。rttValid が true のとき有効。RTT を一度も
+	// 測っていない間は curRTO=initialRTO 固定 (RFC 6298 §2.1)。
+	rtt      rttEstimator
+	rttValid bool
+
+	// cong は輻輳制御 (RFC 5681)。送信窓を min(cwnd, rwnd) に絞り、ACK/重複 ACK/
+	// RTO 満了で cwnd・ssthresh を更新する。
+	cong *congestion
 
 	// challenge ACK throttling のトークン状態 (RFC 5961 §7, timestamp+counter)。
 	// challengeWindowStart は現在の計数窓の開始時刻、challengeCount は窓内送出数。
@@ -149,6 +158,10 @@ type retxSeg struct {
 	payload []byte    // データセグメントの本体 (SYN/FIN 単独なら nil)
 	sentAt  time.Time // 先頭エントリの sentAt が RTO 起点
 	retries int       // 再送回数 (R2 上限判定用)
+
+	// retransmitted は一度でも再送されたか。Karn のアルゴリズム (RFC 6298 §3) で
+	// 再送セグメントの ACK から RTT を測らないために使う。
+	retransmitted bool
 }
 
 // seqLen はこのエントリが占める seq 数 (payload 長 + SYN/FIN 各 1)。ACK 除去判定に使う。
@@ -175,11 +188,11 @@ const msl = 2 * time.Minute
 const timeWaitDuration = 2 * msl
 
 // 再送タイマの定数 seam (テストで境界を突けるよう変数でなく定数だが調整可)。
-// ponytail: SRTT/RTTVAR の RFC 6298 動的計算は未実装。固定 initialRTO + 指数バックオフで足りる。RTT 測定が要るなら Karn 込みでここに足す。
 const (
-	initialRTO     = 1 * time.Second  // RTO 初期値 (RFC 6298 推奨は 1 秒)
+	initialRTO     = 1 * time.Second  // RTO 初期値 (RFC 6298 §2.1, RTT 測定前)
 	maxRTO         = 60 * time.Second // バックオフ上限 (RFC 6298 §2.5 の下限 60 秒)
 	maxRetransmits = 5                // R2 相当。これを超える再送で接続を閉じる
+	clockGranMS    = 1                // RTT 推定のクロック粒度 G (ミリ秒, RFC 6298 §2)
 )
 
 // challenge ACK throttling の定数 seam (RFC 5961 §7 の SHOULD、調整可)。
