@@ -139,6 +139,6 @@ func (r *receiver) dispatch(pkt []byte) {
 		network.Debugf("recv: 破棄 (TCP ヘッダパース失敗): err=%v", err)
 		return // 不正な TCP ヘッダは破棄。
 	}
-	network.Debugf("recv: onSegment flags=%s seq=%d ack=%d", flagsStr(h.Flags), h.SeqNum, h.AckNum)
+	network.Debugf("recv: onSegment flags=%s seq=%d ack=%d", h.Flags, h.SeqNum, h.AckNum)
 	r.conn.onSegment(h, segment[int(h.DataOffset)*4:])
 }

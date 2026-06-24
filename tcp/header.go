@@ -19,6 +19,31 @@ const (
 // Has は f に指定フラグが立っているか返す。
 func (f Flags) Has(x Flags) bool { return f&x != 0 }
 
+// String は制御ビットを "SYN|ACK" のような可読文字列にする (ログ用)。
+// 立っていなければ "-" を返す。
+func (f Flags) String() string {
+	names := []struct {
+		bit  Flags
+		name string
+	}{
+		{FlagSYN, "SYN"}, {FlagACK, "ACK"}, {FlagFIN, "FIN"},
+		{FlagRST, "RST"}, {FlagPSH, "PSH"}, {FlagURG, "URG"},
+	}
+	s := ""
+	for _, n := range names {
+		if f.Has(n.bit) {
+			if s != "" {
+				s += "|"
+			}
+			s += n.name
+		}
+	}
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
 // TCP ヘッダ (RFC 9293 §3.1)。本スタックに必要な最小限のフィールド。
 type TCPHeader struct {
 	SrcPort    uint16

@@ -158,3 +158,21 @@ func TestParseTCPHeader_ShortRead(t *testing.T) {
 		t.Error("declared dataOffset longer than buffer must be rejected")
 	}
 }
+
+// Flags.String は立っているビットを記号で連結し、無印は "-" を返す。
+func TestFlagsString(t *testing.T) {
+	cases := []struct {
+		in   Flags
+		want string
+	}{
+		{0, "-"},
+		{FlagSYN, "SYN"},
+		{FlagSYN | FlagACK, "SYN|ACK"},
+		{FlagFIN, "FIN"},
+	}
+	for _, c := range cases {
+		if got := c.in.String(); got != c.want {
+			t.Errorf("Flags(%d).String() = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
