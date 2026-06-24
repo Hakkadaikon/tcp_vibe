@@ -106,8 +106,8 @@ func runClient(conn *tcp.Conn) {
 // CLOSED まで待つが、2MSL 未経過で抜けられなくてもそれは正常な挙動。
 func waitClientClosed(conn *tcp.Conn) {
 	if !waitState(conn, tcp.TimeWait, 30*time.Second) {
-		log.Printf("TIME-WAIT に入らず終了: 現在 %v (握手到達=%v)", conn.State(), conn.ReachedEstablished())
-		return
+		// 能動 close で TIME-WAIT にすら入れないのは close 失敗。非 0 で抜ける。
+		log.Fatalf("TIME-WAIT に入らず終了: 現在 %v (握手到達=%v)", conn.State(), conn.ReachedEstablished())
 	}
 	log.Printf("close 成功 (TIME-WAIT)。2MSL 経過で CLOSED へ")
 
@@ -145,10 +145,13 @@ func runServer(conn *tcp.Conn) {
 	}
 	if len(received) > 0 {
 		log.Printf("受信: %q (%d バイト)", received, len(received))
+	} else {
+		// データ転送のデモなのに 1 バイトも受け取れていないのは失敗。
+		log.Fatalf("データを 1 バイトも受信できなかった: 現在 %v", conn.State())
 	}
 	if conn.State() != tcp.CloseWait {
-		log.Printf("相手の close を待たずタイムアウト: 現在 %v", conn.State())
-		return
+		// 相手の FIN を受け取れず CLOSE-WAIT に至らないのは通信失敗。非 0 で抜ける。
+		log.Fatalf("相手の close を待たずタイムアウト: 現在 %v", conn.State())
 	}
 	log.Printf("close 開始: 相手の FIN を受けて server からも FIN を送る")
 	conn.Close()
@@ -158,8 +161,8 @@ func runServer(conn *tcp.Conn) {
 // waitClosed は CLOSED 到達まで待ち、節目をログに出す。
 func waitClosed(conn *tcp.Conn) {
 	if !waitState(conn, tcp.Closed, 30*time.Second) {
-		log.Printf("CLOSED まで到達せず終了: 現在 %v", conn.State())
-		return
+		// 受動 close 側は 2MSL 待ちが無く CLOSED まで進むはず。未到達は失敗。
+		log.Fatalf("CLOSED まで到達せず終了: 現在 %v", conn.State())
 	}
 	log.Printf("CLOSED 到達。正常終了")
 }

@@ -157,5 +157,15 @@ just demo-build
 
 別ホスト間で動かすときは `--udp-remote-host` に相手の IP を渡します。
 
+上記の手動 2 プロセス起動は `just e2e` で自動化しています。
+`e2e/e2e_test.go` が tcpdemo をビルドし、server / client の 2 プロセスを UDP トンネル越しに起動して、握手 → データ転送 → close が成立すること (両プロセスが exit 0、受信バイトが一致) を検証します。
+bash で手起動して echo を目視する必要はありません。
+
+```
+just e2e
+```
+
+build tag `e2e` で分離してあるため通常の `just test` / `just check` では走りません。
+
 このリンクの往復と、UDP トンネル越しの握手からデータ転送、close までは `tcp/udplink_test.go` と `tcp/udploopback_test.go` で検証しています。
 どちらも特権を要さないため、このリポジトリのテストとして常時実行されます。

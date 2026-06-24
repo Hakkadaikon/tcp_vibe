@@ -40,17 +40,22 @@ vet:
 
 # 整形 (.aqua 等のツール配下を避け、モジュール内パッケージのみ)
 fmt:
-    gofmt -w tcp cmd
+    gofmt -w tcp cmd e2e
 
 # 整形チェック (CI 用, 差分があれば失敗)
 fmt-check:
-    test -z "$(gofmt -l tcp cmd)"
+    test -z "$(gofmt -l tcp cmd e2e)"
 
 # property-based テストだけ多めに回す
 test-pbt:
     go test -race -run 'Property|Quick|Frame' -count=20 ./...
 
-# 検証ゲート全部 (提出前)
+# 2 プロセス間の実通信 e2e (tcpdemo を server/client で起動し UDP トンネル越しに検証)
+# build tag e2e で分離。-count=1 でキャッシュを無効化し毎回実プロセスを起動する。
+e2e:
+    go test -tags e2e -count=1 ./e2e/
+
+# 検証ゲート全部 (提出前)。e2e は実プロセス起動で重く遅いため含めず、`just e2e` で個別に回す。
 check: vet fmt-check test-flaky
 
 # カバレッジ
