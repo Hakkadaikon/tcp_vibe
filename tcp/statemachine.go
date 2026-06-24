@@ -32,6 +32,9 @@ type Conn struct {
 	ports  struct {
 		src, dst uint16
 	}
+	// deriveTo は LISTEN から派生した接続が確立時に自身を渡す accept チャネル。
+	// 派生でない接続 (active open) は nil。demux goroutine だけが設定・参照する。
+	deriveTo chan *Conn
 }
 
 // NewConn は CLOSED 状態の接続を作る。clock は時刻 seam (再送・TIME-WAIT の決定論検証用)。
