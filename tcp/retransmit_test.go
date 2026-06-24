@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import (
 	"testing"
 	"time"
@@ -8,7 +10,7 @@ import (
 // armedConn は SYN を送って再送キューに 1 件積んだ SYN-SENT の Conn を返す。
 // SYN は 1 seq を消費するため再送キューに乗る (RTO 駆動の最小土台)。
 // 初回 SYN は peer に残したまま返す (観測は呼び出し側で行う)。
-func armedConn(t *testing.T) (*Conn, Link, *fakeClock) {
+func armedConn(t *testing.T) (*Conn, link.Link, *fakeClock) {
 	t.Helper()
 	c, peer, fc := newTestConn(t)
 	c.ActiveOpen(1000)
@@ -18,7 +20,7 @@ func armedConn(t *testing.T) (*Conn, Link, *fakeClock) {
 // lastSent は peer に溜まった全セグメントを読み切り、最後の 1 つを返す。
 // drainPeerNonblock は peer を閉じるので、複数セグメントが溜まっていても
 // 閉じた後に残りを読み切れる (ReadPacket は closed でも inbox 非空なら返す)。
-func lastSent(t *testing.T, peer Link) (TCPHeader, int) {
+func lastSent(t *testing.T, peer link.Link) (TCPHeader, int) {
 	t.Helper()
 	var last TCPHeader
 	n := 0

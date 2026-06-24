@@ -1,16 +1,17 @@
 package tcp
 
-import "github.com/hakkadaikon/tcp_vibe/tcp/network"
-
 import (
 	"sync"
 	"time"
+
+	"github.com/hakkadaikon/tcp_vibe/tcp/link"
+	"github.com/hakkadaikon/tcp_vibe/tcp/network"
 )
 
 // Stack は 1 つの link を複数接続で共有し、受信を 1 本の goroutine で demux する。
 // 4-tuple 完全一致 → LISTEN 派生 → RST 生成、の順で受信セグメントを振り分ける。
 type Stack struct {
-	link  Link
+	link  link.Link
 	clock Clock
 	table *connTable
 
@@ -30,9 +31,9 @@ type Stack struct {
 
 // NewStack は link を共有する接続多重化スタックを作り、受信 demux と Tick を起動する。
 // demux は受信パケットの宛先で接続を引くので local IP はパケット側から決まる。
-func NewStack(link Link, clock Clock) *Stack {
+func NewStack(lnk link.Link, clock Clock) *Stack {
 	s := &Stack{
-		link:      link,
+		link:      lnk,
 		clock:     clock,
 		table:     newConnTable(),
 		done:      make(chan struct{}),

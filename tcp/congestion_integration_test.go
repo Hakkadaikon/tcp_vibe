@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import (
 	"testing"
 	"time"
@@ -9,7 +11,7 @@ import (
 // SYN(seq=1000) → SYN,ACK(seq=5000,ack=1001) を注入して ESTABLISHED にする。
 // peer の inbox に溜まる送出セグメントは drain しない (pipeLink は drain で閉じ、
 // 以後の送信が失われるため)。各テストは観測ヘルパか末尾の 1 回 drain で確認する。
-func established(t *testing.T) (*Conn, Link, *fakeClock) {
+func established(t *testing.T) (*Conn, link.Link, *fakeClock) {
 	t.Helper()
 	c, peer, fc := newTestConn(t)
 	c.ActiveOpen(1000) // SYN(seq=1000), SND.NXT=1001
@@ -21,7 +23,7 @@ func established(t *testing.T) (*Conn, Link, *fakeClock) {
 }
 
 // drainAll は peer に溜まった全セグメントを読み切って返す (末尾で 1 回だけ呼ぶ)。
-func drainAll(t *testing.T, peer Link) []TCPHeader {
+func drainAll(t *testing.T, peer link.Link) []TCPHeader {
 	t.Helper()
 	var hs []TCPHeader
 	for {

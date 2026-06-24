@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "github.com/hakkadaikon/tcp_vibe/tcp/network"
 
 import (
@@ -11,7 +13,7 @@ const testKAIdle = 10 * time.Second
 
 // collectSegs は peer を閉じて溜まった送出セグメントのヘッダを全て返す
 // (非ブロッキング)。Close するので 1 テストにつき最後に 1 回だけ呼ぶ。
-func collectSegs(t *testing.T, peer Link) []TCPHeader {
+func collectSegs(t *testing.T, peer link.Link) []TCPHeader {
 	t.Helper()
 	peer.Close()
 	var out []TCPHeader

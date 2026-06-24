@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import (
 	"bytes"
 	"sync"
@@ -10,7 +12,7 @@ import (
 // 2 つの Stack を pipe で繋ぎ、一方が Listen、他方が複数 Dial して
 // 複数接続が同時に握手〜データ転送〜close できることを確認する (loopback)。
 func TestStackLoopbackMultipleConns(t *testing.T) {
-	aLink, bLink := NewPipeLink()
+	aLink, bLink := link.NewPipeLink()
 	fc := newFakeClock()
 
 	ipA := [4]byte{10, 0, 0, 1}
@@ -73,7 +75,7 @@ func TestStackLoopbackMultipleConns(t *testing.T) {
 // Accept で待機中に Close すると Accept が nil を返してブロックを抜ける。
 // 二重 Close でも panic しない。
 func TestListenerCloseUnblocksAccept(t *testing.T) {
-	_, bLink := NewPipeLink()
+	_, bLink := link.NewPipeLink()
 	fc := newFakeClock()
 	server := NewStack(bLink, fc.Now)
 	t.Cleanup(server.Close)
@@ -101,7 +103,7 @@ func TestListenerCloseUnblocksAccept(t *testing.T) {
 
 // LISTEN が派生後も LISTEN のまま残ることを、別 remote から順次 SYN を送って確認する。
 func TestListenerStaysListening(t *testing.T) {
-	aLink, bLink := NewPipeLink()
+	aLink, bLink := link.NewPipeLink()
 	fc := newFakeClock()
 	ipA := [4]byte{10, 0, 0, 1}
 	ipB := [4]byte{10, 0, 0, 2}
@@ -123,7 +125,7 @@ func TestListenerStaysListening(t *testing.T) {
 
 // 1 つの link 上で複数接続が同時に握手・データ・close しても race が無い (-race)。
 func TestStackConcurrentConnsRaceClean(t *testing.T) {
-	aLink, bLink := NewPipeLink()
+	aLink, bLink := link.NewPipeLink()
 	fc := newFakeClock()
 	ipA := [4]byte{10, 0, 0, 1}
 	ipB := [4]byte{10, 0, 0, 2}

@@ -1,11 +1,13 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "github.com/hakkadaikon/tcp_vibe/tcp/network"
 
 import "testing"
 
 // sackOpts は peer に届いた次セグメントの SACK ブロックを返す。
-func sackOpts(t *testing.T, peer Link) (TCPOptions, bool) {
+func sackOpts(t *testing.T, peer link.Link) (TCPOptions, bool) {
 	t.Helper()
 	pkt, err := peer.ReadPacket()
 	if err != nil {

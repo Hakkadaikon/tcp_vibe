@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "github.com/hakkadaikon/tcp_vibe/tcp/network"
 
 import (
@@ -14,7 +16,7 @@ type sentSeg struct {
 	payload []byte
 }
 
-func drainSegs(peer Link) []sentSeg {
+func drainSegs(peer link.Link) []sentSeg {
 	peer.Close()
 	var out []sentSeg
 	for {
@@ -37,9 +39,9 @@ func drainSegs(peer Link) []sentSeg {
 
 // swapPeer は Conn の送信リンクを新しい pipe に差し替え、新しい観測側を返す。
 // 既存 peer を閉じた drainSegs の後、以降の送出だけを観測したいときに使う。
-func (c *Conn) swapPeer(t *testing.T) (*Conn, Link, *fakeClock) {
+func (c *Conn) swapPeer(t *testing.T) (*Conn, link.Link, *fakeClock) {
 	t.Helper()
-	a, b := NewPipeLink()
+	a, b := link.NewPipeLink()
 	c.mu.Lock()
 	c.link = a
 	c.mu.Unlock()

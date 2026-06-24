@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "testing"
 
 // Window Scale のスケール演算が実際に送受信へ効くことを突くテスト群 (RFC 7323 §2.3)。
@@ -8,7 +10,7 @@ import "testing"
 
 // scaledEstab は shift を折衝済みにした ESTABLISHED Conn を返す。
 // 入力 shift (Snd.Wind.Shift) と出力 shift (Rcv.Wind.Shift) を別々に指定できる。
-func scaledEstab(t *testing.T, sndShift, rcvShift uint8) (*Conn, Link) {
+func scaledEstab(t *testing.T, sndShift, rcvShift uint8) (*Conn, link.Link) {
 	t.Helper()
 	c, peer, _ := estab(t)
 	c.tcb.sndWindShift = sndShift

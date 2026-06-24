@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import (
 	"testing"
 	"time"
@@ -13,7 +15,7 @@ func injectSyn(c *Conn) {
 // countSent は peer に溜まった全セグメント数を読み切って返す。
 // drainPeerNonblock は peer を閉じるが、閉じた後も inbox 非空なら読めるので
 // 「送られた総数」を一括カウントできる。抑制されたぶんは inbox に積まれない。
-func countSent(peer Link) int {
+func countSent(peer link.Link) int {
 	n := 0
 	for {
 		if _, ok := drainPeerNonblock(peer); !ok {

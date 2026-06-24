@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import (
 	"testing"
 	"time"
@@ -7,7 +9,7 @@ import (
 
 // estabTS は timestamps 折衝済みの ESTABLISHED 接続を組む。
 // TS.Recent=1000, Last.ACK.sent を広めに置き SEQ ゲートが通る状態にする。
-func estabTS(t *testing.T) (*Conn, Link, *fakeClock) {
+func estabTS(t *testing.T) (*Conn, link.Link, *fakeClock) {
 	t.Helper()
 	c, peer, fc := estab(t)
 	c.tcb.tsOK = true

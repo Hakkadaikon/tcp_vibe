@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "testing"
 
 // ACK 受理範囲 (RFC 5961 §5.2 data injection 緩和) の境界・wrap を突くテスト群。
@@ -8,7 +10,7 @@ import "testing"
 // なければ前進しない (古い重複 ACK は challenge せず黙って受ける)。
 
 // ackRangeConn は una/nxt/maxSndWnd を指定した ESTABLISHED Conn を返す。
-func ackRangeConn(t *testing.T, una, nxt, maxSndWnd uint32) (*Conn, Link) {
+func ackRangeConn(t *testing.T, una, nxt, maxSndWnd uint32) (*Conn, link.Link) {
 	t.Helper()
 	c, peer, _ := estab(t)
 	c.tcb.snd.una = una

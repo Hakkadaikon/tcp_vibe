@@ -1,10 +1,12 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "testing"
 
 // synAckOpts は SYN-ACK 受信を模す。指定オプションを載せて active open 中の
 // Conn へ渡し、折衝結果 (TCB) を観測できるようにする。
-func establishActiveWith(t *testing.T, peerOpts TCPOptions) (*Conn, Link) {
+func establishActiveWith(t *testing.T, peerOpts TCPOptions) (*Conn, link.Link) {
 	t.Helper()
 	c, peer, _ := newTestConn(t)
 	c.ActiveOpen(1000)

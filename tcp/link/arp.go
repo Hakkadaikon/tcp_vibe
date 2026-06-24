@@ -1,4 +1,4 @@
-package tcp
+package link
 
 import "github.com/hakkadaikon/tcp_vibe/tcp/network"
 

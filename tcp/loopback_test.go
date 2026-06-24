@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import (
 	"bytes"
 	"testing"
@@ -26,11 +28,11 @@ var (
 	lbServer = Endpoint{IP: [4]byte{10, 0, 0, 2}, Port: 9000}
 )
 
-// 2 つの Conn を NewPipeLink の両端に置き、それぞれに受信ループを回して、
+// 2 つの Conn を link.NewPipeLink の両端に置き、それぞれに受信ループを回して、
 // 実際にバイトを流して 3way ハンドシェイク〜close を成立させる。
 // 自作スタックが自分の受信ループを通して実際にプロトコルを喋れることの証明。
 func TestLoopbackHandshakeAndClose(t *testing.T) {
-	clientLink, serverLink := NewPipeLink()
+	clientLink, serverLink := link.NewPipeLink()
 	fc := newFakeClock()
 
 	client := NewConn(clientLink, fc.Now, lbClient, lbServer)
@@ -93,7 +95,7 @@ func recvAll(t *testing.T, c *Conn, want int) []byte {
 // 握手後に実データを流し、相手側で送信順のバイト列が読めることを確認する。
 // 小さいメッセージ・複数回 Send・MSS 超の大きいデータ (複数セグメント分割) を通す。
 func TestLoopbackDataTransfer(t *testing.T) {
-	clientLink, serverLink := NewPipeLink()
+	clientLink, serverLink := link.NewPipeLink()
 	fc := newFakeClock()
 
 	client := NewConn(clientLink, fc.Now, lbClient, lbServer)
@@ -137,7 +139,7 @@ func TestLoopbackDataTransfer(t *testing.T) {
 // 初期ウィンドウ (IW) を遥かに超える大データが、cwnd 制御下で ACK 駆動の
 // ウィンドウ成長を経て全部・順序通りに届くことを確認する。
 func TestLoopbackLargeTransferUnderCwnd(t *testing.T) {
-	clientLink, serverLink := NewPipeLink()
+	clientLink, serverLink := link.NewPipeLink()
 	fc := newFakeClock()
 
 	client := NewConn(clientLink, fc.Now, lbClient, lbServer)
@@ -171,7 +173,7 @@ func TestLoopbackLargeTransferUnderCwnd(t *testing.T) {
 // 届くことを確認する。受信窓を縮めず、読んで開いた窓を window update ACK で送信側へ
 // 伝える経路が end-to-end で働き、窓詰まりで止まらない (デッドロックしない) ことの証明。
 func TestLoopbackFlowControlSmallBuffer(t *testing.T) {
-	clientLink, serverLink := NewPipeLink()
+	clientLink, serverLink := link.NewPipeLink()
 	fc := newFakeClock()
 
 	client := NewConn(clientLink, fc.Now, lbClient, lbServer)

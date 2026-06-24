@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "github.com/hakkadaikon/tcp_vibe/tcp/network"
 
 import (
@@ -20,7 +22,7 @@ func newFakeClock() *fakeClock {
 // drainPeer は対向リンクに溜まった送信セグメントを 1 つ読み、ヘッダを返す。
 // 送信が無ければ ok=false。テストでは pipeLink を非ブロッキングに読むため
 // 事前に閉じず、ReadPacket がブロックしないよう「来ているはず」の前提で呼ぶ。
-func drainPeer(t *testing.T, peer Link) (TCPHeader, bool) {
+func drainPeer(t *testing.T, peer link.Link) (TCPHeader, bool) {
 	t.Helper()
 	pkt, err := peer.ReadPacket()
 	if err != nil {
@@ -53,16 +55,16 @@ var (
 )
 
 // newTestConn は Conn と、Conn の送信を観測する対向リンクを返す。
-func newTestConn(t *testing.T) (*Conn, Link, *fakeClock) {
+func newTestConn(t *testing.T) (*Conn, link.Link, *fakeClock) {
 	t.Helper()
-	a, b := NewPipeLink()
+	a, b := link.NewPipeLink()
 	fc := newFakeClock()
 	c := NewConn(a, fc.Now, testLocal, testRemote)
 	return c, b, fc
 }
 
 // expectFlags は対向に届いた次セグメントが期待フラグを持つか検証する。
-func expectFlags(t *testing.T, peer Link, want Flags) TCPHeader {
+func expectFlags(t *testing.T, peer link.Link, want Flags) TCPHeader {
 	t.Helper()
 	h, ok := drainPeer(t, peer)
 	if !ok {
@@ -171,7 +173,7 @@ func TestSimultaneousOpenRecordsActiveOriginAndRstGoesToClosed(t *testing.T) {
 
 // estab は ESTABLISHED 状態の Conn を組む (同期状態テストの共通土台)。
 // SND.UNA=4000, SND.NXT=4000, RCV.NXT=8000, RCV.WND=1000 とする。
-func estab(t *testing.T) (*Conn, Link, *fakeClock) {
+func estab(t *testing.T) (*Conn, link.Link, *fakeClock) {
 	t.Helper()
 	c, peer, fc := newTestConn(t)
 	c.tcb.state = Established
@@ -494,19 +496,11 @@ func TestCloseInListenGoesToClosed(t *testing.T) {
 
 // drainPeerNonblockKeep は対向に届いたセグメントが 1 つでもあれば取り出して true。
 // peer を閉じず inbox を非ブロッキングに覗く (複数回呼べる)。
-func drainPeerNonblockKeep(peer Link) (TCPHeader, bool) {
-	pl, ok := peer.(*pipeLink)
+func drainPeerNonblockKeep(peer link.Link) (TCPHeader, bool) {
+	pkt, ok := link.TryReadPacket(peer)
 	if !ok {
 		return TCPHeader{}, false
 	}
-	pl.mu.Lock()
-	if len(pl.inbox) == 0 {
-		pl.mu.Unlock()
-		return TCPHeader{}, false
-	}
-	pkt := pl.inbox[0]
-	pl.inbox = pl.inbox[1:]
-	pl.mu.Unlock()
 	ip, err := network.ParseIPv4Header(pkt)
 	if err != nil {
 		return TCPHeader{}, false
@@ -555,7 +549,7 @@ func TestClosedRstIsIgnored(t *testing.T) {
 
 // drainPeerNonblock は対向にセグメントが届いていれば読む。無ければ ok=false で
 // ブロックしない。pipeLink を一旦閉じて溜まった分だけ読み切る方式。
-func drainPeerNonblock(peer Link) (TCPHeader, bool) {
+func drainPeerNonblock(peer link.Link) (TCPHeader, bool) {
 	peer.Close()
 	pkt, err := peer.ReadPacket()
 	if err != nil {

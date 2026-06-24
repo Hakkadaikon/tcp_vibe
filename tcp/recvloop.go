@@ -1,10 +1,11 @@
 package tcp
 
-import "github.com/hakkadaikon/tcp_vibe/tcp/network"
-
 import (
 	"sync"
 	"time"
+
+	"github.com/hakkadaikon/tcp_vibe/tcp/link"
+	"github.com/hakkadaikon/tcp_vibe/tcp/network"
 )
 
 // Serve は conn の受信ループを起動し、再送・TIME-WAIT 満了を駆動する Tick を
@@ -52,7 +53,7 @@ func Serve(conn *Conn, maxPacket int) (stop func()) {
 // receiver 自身は Conn を改変せず、外から onSegment を呼んで駆動する薄い層。
 type receiver struct {
 	conn *Conn
-	link Link
+	link link.Link
 
 	wg   sync.WaitGroup
 	once sync.Once // Stop の冪等化
@@ -63,11 +64,11 @@ type receiver struct {
 
 // newReceiver は link から TCP セグメントを読んで conn.onSegment へ流す受信器を作る。
 // maxPacket は将来のストリーム型 Link 用に予約 (現状の境界保持 Link では未使用)。
-func newReceiver(conn *Conn, link Link, maxPacket int) *receiver {
+func newReceiver(conn *Conn, lnk link.Link, maxPacket int) *receiver {
 	_ = maxPacket
 	return &receiver{
 		conn: conn,
-		link: link,
+		link: lnk,
 	}
 }
 

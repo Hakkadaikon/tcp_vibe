@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "github.com/hakkadaikon/tcp_vibe/tcp/network"
 
 import (
@@ -11,7 +13,7 @@ import (
 
 // establishedConn は握手を済ませた ESTABLISHED の Conn を返す。
 // 相手の広告窓は wnd。送出は peer で観測する。ISS=1000, 相手 ISS=5000。
-func establishedConn(t *testing.T, wnd uint16) (*Conn, Link, *fakeClock) {
+func establishedConn(t *testing.T, wnd uint16) (*Conn, link.Link, *fakeClock) {
 	t.Helper()
 	c, peer, fc := newTestConn(t)
 	c.ActiveOpen(1000)
@@ -25,7 +27,7 @@ func establishedConn(t *testing.T, wnd uint16) (*Conn, Link, *fakeClock) {
 }
 
 // drainPayloads は peer に溜まった全セグメントを読み、各 payload を連結して返す。
-func drainPayloads(peer Link) []byte {
+func drainPayloads(peer link.Link) []byte {
 	peer.Close()
 	var out []byte
 	for {

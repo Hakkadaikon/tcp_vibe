@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "github.com/hakkadaikon/tcp_vibe/tcp/network"
 
 import (
@@ -21,7 +23,7 @@ func buildSeg(src, dst [4]byte, h TCPHeader, payload []byte) []byte {
 }
 
 // readSegWithin は peer link から 1 パケット読み TCP ヘッダを返す。timeout で nil。
-func readSegWithin(t *testing.T, peer Link, d time.Duration) *TCPHeader {
+func readSegWithin(t *testing.T, peer link.Link, d time.Duration) *TCPHeader {
 	t.Helper()
 	type res struct {
 		h  TCPHeader
@@ -51,7 +53,7 @@ func readSegWithin(t *testing.T, peer Link, d time.Duration) *TCPHeader {
 
 // 一致無し・非 RST → ちょうど 1 つの RST が返る (RFC 9293 §3.10.7.1)。
 func TestDemuxNoMatchNonRstGeneratesOneRst(t *testing.T) {
-	stackLink, peer := NewPipeLink()
+	stackLink, peer := link.NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
@@ -78,7 +80,7 @@ func TestDemuxNoMatchNonRstGeneratesOneRst(t *testing.T) {
 // 「応答が来ないこと」は実時間タイムアウトでなく demux を同期で叩いて確定的に判定する。
 // demux が返った時点で同期応答はすべて peer inbox に積まれているので、空なら確実に無応答。
 func TestDemuxRstInputNoRstBack(t *testing.T) {
-	stackLink, peer := NewPipeLink()
+	stackLink, peer := link.NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
@@ -93,7 +95,7 @@ func TestDemuxRstInputNoRstBack(t *testing.T) {
 
 // LISTEN のある port に SYN → 派生して SYN-ACK が返る。
 func TestDemuxSynToListenDerives(t *testing.T) {
-	stackLink, peer := NewPipeLink()
+	stackLink, peer := link.NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
@@ -114,7 +116,7 @@ func TestDemuxSynToListenDerives(t *testing.T) {
 
 // TIME-WAIT の 4-tuple へ新 SYN → 置換され二重にならない (LISTEN 派生で新 incarnation)。
 func TestDemuxTimeWaitReplacedBySyn(t *testing.T) {
-	stackLink, peer := NewPipeLink()
+	stackLink, peer := link.NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
@@ -146,7 +148,7 @@ func TestDemuxTimeWaitReplacedBySyn(t *testing.T) {
 // CLOSED まで進めた接続は connTable と Tick 集合から回収され、同じ 4-tuple で
 // 新規 SYN が LISTEN 派生して握手できる (4-tuple 再利用可能)。
 func TestClosedConnReapedAndTupleReusable(t *testing.T) {
-	stackLink, peer := NewPipeLink()
+	stackLink, peer := link.NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
@@ -180,7 +182,7 @@ func TestClosedConnReapedAndTupleReusable(t *testing.T) {
 
 // CLOSED へ達した接続は Tick 集合から消える (tickLoop が死接続を叩き続けない)。
 func TestClosedConnRemovedFromTickSet(t *testing.T) {
-	stackLink, _ := NewPipeLink()
+	stackLink, _ := link.NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
@@ -211,7 +213,7 @@ func TestClosedConnRemovedFromTickSet(t *testing.T) {
 
 // TIME-WAIT の 4-tuple へ新 SYN → 派生接続の ISS が旧接続の max seq より大きい。
 func TestTimeWaitReplacementIssExceedsOldMaxSeq(t *testing.T) {
-	stackLink, peer := NewPipeLink()
+	stackLink, peer := link.NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
@@ -245,7 +247,7 @@ func TestTimeWaitReplacementIssExceedsOldMaxSeq(t *testing.T) {
 
 // broadcast/multicast/不正 src の SYN は破棄 (派生も RST もしない)。
 func TestDemuxInvalidSrcSynDropped(t *testing.T) {
-	stackLink, peer := NewPipeLink()
+	stackLink, peer := link.NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)
@@ -265,7 +267,7 @@ func TestDemuxInvalidSrcSynDropped(t *testing.T) {
 // 完全一致 TCB が LISTEN より優先される。LISTEN と同じ local port で確立済み
 // 接続があるとき、その 4-tuple 宛のセグメントは派生ではなく既存接続へ届く。
 func TestDemuxExactMatchBeatsListen(t *testing.T) {
-	stackLink, _ := NewPipeLink()
+	stackLink, _ := link.NewPipeLink()
 	fc := newFakeClock()
 	s := NewStack(stackLink, fc.Now)
 	t.Cleanup(s.Close)

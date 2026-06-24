@@ -1,5 +1,7 @@
 package tcp
 
+import "github.com/hakkadaikon/tcp_vibe/tcp/link"
+
 import "github.com/hakkadaikon/tcp_vibe/tcp/network"
 
 import (
@@ -32,11 +34,11 @@ func buildSegment(h TCPHeader, payload []byte) []byte {
 	return append(ip.Marshal(), tcp...)
 }
 
-// newTestReceiver は LISTEN 中の Conn と、Conn へパケットを流し込む書き込み側 Link、
+// newTestReceiver は LISTEN 中の Conn と、Conn へパケットを流し込む書き込み側 link.Link、
 // 起動済みの receiver を返す。teardown で Stop する。
-func newTestReceiver(t *testing.T) (*Conn, Link, *receiver) {
+func newTestReceiver(t *testing.T) (*Conn, link.Link, *receiver) {
 	t.Helper()
-	a, b := NewPipeLink() // a が Conn 側、b がテストから書き込む側
+	a, b := link.NewPipeLink() // a が Conn 側、b がテストから書き込む側
 	fc := newFakeClock()
 	c := NewConn(a, fc.Now, Endpoint{IP: rlDst}, Endpoint{IP: rlSrc})
 	c.tcb.snd.iss = 7000
@@ -60,7 +62,7 @@ func TestReceiveLoopDeliversSynToStateMachine(t *testing.T) {
 	waitState(t, c, SynReceived)
 }
 
-// パケット境界: 現状の Link は 1 WritePacket = 1 IP パケットの境界を保つ。
+// パケット境界: 現状の link.Link は 1 WritePacket = 1 IP パケットの境界を保つ。
 // 2 回 WritePacket すれば 2 パケットがそれぞれ処理される。
 // SYN → (SYN-RECEIVED) → ACK → ESTABLISHED を 2 回に分けて送る。
 func TestReceiveLoopProcessesEachPacketSeparately(t *testing.T) {
@@ -166,7 +168,7 @@ func TestReceiveLoopHandlesTrailingPadding(t *testing.T) {
 
 // 終了: link を閉じると受信ループ goroutine が終了し Stop が返る (リークしない)。
 func TestReceiveLoopStopsWhenLinkClosed(t *testing.T) {
-	a, _ := NewPipeLink()
+	a, _ := link.NewPipeLink()
 	fc := newFakeClock()
 	c := NewConn(a, fc.Now, Endpoint{IP: rlDst}, Endpoint{IP: rlSrc})
 	c.PassiveOpen()

@@ -7,7 +7,12 @@ import (
 	"io"
 	"testing"
 	"time"
+
+	"github.com/hakkadaikon/tcp_vibe/tcp/link"
 )
+
+// loIP はループバックアドレス。実 UDP / hole punch 越しの結合テストで運搬先に使う。
+var loIP = [4]byte{127, 0, 0, 1}
 
 // 自作スタックのエンドポイント (UDP の運搬先とは別物。自作 TCP/IP ヘッダ内の IP)。
 var (
@@ -43,11 +48,11 @@ func waitConnState(t *testing.T, c *Conn, want State) {
 func TestUDPLoopback_HandshakeDataClose(t *testing.T) {
 	const pClient, pServer = 53100, 53101
 
-	clientLink, err := NewUDPLink(pClient, loIP, pServer)
+	clientLink, err := link.NewUDPLink(pClient, loIP, pServer)
 	if err != nil {
 		t.Fatalf("client link: %v", err)
 	}
-	serverLink, err := NewUDPLink(pServer, loIP, pClient)
+	serverLink, err := link.NewUDPLink(pServer, loIP, pClient)
 	if err != nil {
 		clientLink.Close()
 		t.Fatalf("server link: %v", err)

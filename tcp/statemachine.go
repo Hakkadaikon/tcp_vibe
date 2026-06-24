@@ -1,10 +1,11 @@
 package tcp
 
-import "github.com/hakkadaikon/tcp_vibe/tcp/network"
-
 import (
 	"sync"
 	"time"
+
+	"github.com/hakkadaikon/tcp_vibe/tcp/link"
+	"github.com/hakkadaikon/tcp_vibe/tcp/network"
 )
 
 // maxWindow は window scale 無しの送信窓上限 (RFC 5961 MAX.SND.WND 既定値)。
@@ -26,7 +27,7 @@ type Endpoint struct {
 // クリティカルセクションで直列化する。受信は onSegment を呼ぶ側 (将来の受信
 // ループ goroutine) が 1 本に絞る前提。状態アクセスは必ず mutex 越し。
 type Conn struct {
-	link   Link
+	link   link.Link
 	local  Endpoint
 	remote Endpoint
 	mu     sync.Mutex
@@ -41,8 +42,8 @@ type Conn struct {
 
 // NewConn は CLOSED 状態の接続を作る。clock は時刻 seam (再送・TIME-WAIT の決定論検証用)。
 // local/remote は送出パケットの IP/TCP ヘッダと TCP チェックサム擬似ヘッダに使う。
-func NewConn(link Link, clock Clock, local, remote Endpoint) *Conn {
-	c := &Conn{link: link, local: local, remote: remote}
+func NewConn(lnk link.Link, clock Clock, local, remote Endpoint) *Conn {
+	c := &Conn{link: lnk, local: local, remote: remote}
 	c.ports.src = local.Port
 	c.ports.dst = remote.Port
 	c.tcb.state = Closed
