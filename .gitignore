@@ -1,4 +1,11 @@
-tasks/
 .gocache/
 .aqua/
 bin/
+
+# tasks/ 配下はソース (台帳・spec・Lean・レポート・RFC) はコミットし、
+# 二次生成物 (ビルド成果物・検査スクラッチ・自動生成トレース) のみ除外する。
+tasks/fv/TcpFv/.lake/
+tasks/loopeng/.tlc/
+tasks/loopeng/*_TTrace_*.tla
+tasks/loopeng/*_TTrace_*.bin
+tasks/loopeng/*.bin
