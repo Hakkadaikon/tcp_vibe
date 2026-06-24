@@ -1,0 +1,10 @@
+name = "TcpFv"
+version = "0.1.0"
+defaultTargets = ["tcpfv"]
+
+[[lean_lib]]
+name = "TcpFv"
+
+[[lean_exe]]
+name = "tcpfv"
+root = "Main"
