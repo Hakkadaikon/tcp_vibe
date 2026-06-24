@@ -19,11 +19,13 @@ import (
 
 func main() {
 	mode := flag.String("mode", "client", "client (active open) または server (passive open)")
-	linkKind := flag.String("link", "tun", "リンク種別: tun (要 root/TUN) または udp (特権不要の UDP トンネル)")
+	linkKind := flag.String("link", "tun", "リンク種別: tun (要 root/TUN)、udp (特権不要の UDP トンネル)、unix (特権不要・UDP プロトコルも通さない Unix domain socket)")
 	ifName := flag.String("tun", "tun0", "TUN デバイス名 (--link=tun)")
 	udpLocalPort := flag.Uint("udp-local-port", 40000, "UDP トンネルのローカルポート (--link=udp)")
 	udpRemotePort := flag.Uint("udp-remote-port", 40001, "UDP トンネルの相手ポート (--link=udp)")
 	udpRemoteHost := flag.String("udp-remote-host", "127.0.0.1", "UDP トンネルの相手ホスト (--link=udp)")
+	unixLocal := flag.String("unix-local", "/tmp/tcpvibe-local.sock", "Unix domain socket のローカルパス (--link=unix)")
+	unixRemote := flag.String("unix-remote", "/tmp/tcpvibe-remote.sock", "Unix domain socket の相手パス (--link=unix)")
 	localIP := flag.String("local-ip", "10.0.0.1", "自分の IPv4 アドレス")
 	localPort := flag.Uint("local-port", 9000, "自分のポート")
 	remoteIP := flag.String("remote-ip", "10.0.0.2", "相手の IPv4 アドレス")
@@ -53,8 +55,14 @@ func main() {
 			log.Fatalf("UDP トンネルを開けない (local=:%d remote=%s:%d): %v", *udpLocalPort, *udpRemoteHost, *udpRemotePort, err)
 		}
 		log.Printf("UDP トンネル: local=:%d remote=%s:%d (特権不要)", *udpLocalPort, *udpRemoteHost, *udpRemotePort)
+	case "unix":
+		link, err = tcp.NewUnixLink(*unixLocal, *unixRemote)
+		if err != nil {
+			log.Fatalf("Unix socket を開けない (local=%s remote=%s): %v", *unixLocal, *unixRemote, err)
+		}
+		log.Printf("Unix socket トンネル: local=%s remote=%s (特権不要・UDP プロトコル不使用)", *unixLocal, *unixRemote)
 	default:
-		log.Fatalf("不明な --link: %q (tun か udp)", *linkKind)
+		log.Fatalf("不明な --link: %q (tun / udp / unix)", *linkKind)
 	}
 
 	conn := tcp.NewConn(link, time.Now, local, remote)
