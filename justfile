@@ -1,5 +1,6 @@
 # 自作 TCP スタック (RFC 9293 + RFC 5961) タスクランナー
-# パッケージ管理は aqua。go/just は .aqua 配下に固定。
+# パッケージ管理は aqua。Go は .aqua 配下に固定し、各レシピで PATH を通す。
+# `just <レシピ名>` で実行する (例: just test)。
 
 # aqua 配下のツールを PATH 先頭に。GOCACHE はサンドボックス read-only 回避で repo 内に。
 export AQUA_ROOT_DIR := justfile_directory() + "/.aqua"
